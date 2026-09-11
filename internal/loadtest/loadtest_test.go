@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func fakeGateway(t *testing.T, stream bool, mode atomic.Int64) (string, *atomic.Int64, func(string)) {
+func fakeGateway(t *testing.T, stream bool, mode *atomic.Int64) (string, *atomic.Int64, func(string)) {
 	t.Helper()
 	var seen atomic.Int64
 	var sawStream atomic.Bool
@@ -65,7 +65,7 @@ func fakeGateway(t *testing.T, stream bool, mode atomic.Int64) (string, *atomic.
 
 func TestLoadtestChatMeasuresThroughputAndLatency(t *testing.T) {
 	var mode atomic.Int64
-	url, _, _ := fakeGateway(t, false, mode)
+	url, _, _ := fakeGateway(t, false, &mode)
 	report, err := Run(context.Background(), Config{
 		BaseURL: url, APIKey: "sk-test", Model: "default-chat",
 		Duration: 500 * time.Millisecond, Concurrency: 4,
@@ -92,7 +92,7 @@ func TestLoadtestChatMeasuresThroughputAndLatency(t *testing.T) {
 
 func TestLoadtestStreamMeasuresTTFT(t *testing.T) {
 	var mode atomic.Int64
-	url, _, _ := fakeGateway(t, true, mode)
+	url, _, _ := fakeGateway(t, true, &mode)
 	report, err := Run(context.Background(), Config{
 		BaseURL: url, APIKey: "sk-test", Model: "default-chat",
 		Duration: 500 * time.Millisecond, Concurrency: 2, Stream: true,
@@ -113,7 +113,7 @@ func TestLoadtestStreamMeasuresTTFT(t *testing.T) {
 
 func TestLoadtestSLOFailure(t *testing.T) {
 	var mode atomic.Int64
-	url, _, _ := fakeGateway(t, false, mode)
+	url, _, _ := fakeGateway(t, false, &mode)
 	report, err := Run(context.Background(), Config{
 		BaseURL: url, APIKey: "sk-test", Model: "default-chat",
 		Duration: 300 * time.Millisecond, Concurrency: 1,
