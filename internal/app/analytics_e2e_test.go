@@ -47,7 +47,7 @@ func TestAnalyticsSinkForwardsRedactedEvents(t *testing.T) {
 	t.Cleanup(clickhouse.Close)
 
 	lite, err := NewLite(context.Background(), LiteOptions{
-		DSN:       "file:analytics-sink?mode=memory&cache=shared",
+		DSN:       testMemoryDSN(t, "analytics-sink"),
 		Analytics: &AnalyticsOptions{BaseURL: clickhouse.URL, Table: "analytics_events"},
 	})
 	if err != nil {

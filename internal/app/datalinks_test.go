@@ -19,7 +19,7 @@ import (
 func setupLite(t *testing.T) (*Lite, *httptest.Server, map[string]string, string, string) {
 	t.Helper()
 	provider := newTestProviderServer(t)
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:lite-data-links?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "lite-data-links")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ func TestA2AFederationTrustEnforced(t *testing.T) {
 	}))
 	t.Cleanup(a2a.Close)
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:a2a-federation?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "a2a-federation")})
 	if err != nil {
 		t.Fatal(err)
 	}

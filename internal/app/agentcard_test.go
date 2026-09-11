@@ -16,7 +16,7 @@ import (
 // the server-level Config.LocalAgentCard).
 func TestLitePublishesLocalAgentCard(t *testing.T) {
 	lite, err := NewLite(context.Background(), LiteOptions{
-		DSN: "file:agent-card-pub?mode=memory&cache=shared",
+		DSN: testMemoryDSN(t, "agent-card-pub"),
 		AgentCard: &a2a.AgentCard{
 			Name: "local-agent", URL: "https://local.example/agent",
 			Description: "published by lite", Version: "1.0.0",
@@ -52,7 +52,7 @@ func TestLitePublishesLocalAgentCard(t *testing.T) {
 }
 
 func TestLiteWithoutAgentCardReturnsNotFound(t *testing.T) {
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:agent-card-none?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "agent-card-none")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,7 +34,7 @@ func TestA2AInboundFederatedPrincipal(t *testing.T) {
 	}))
 	t.Cleanup(relay.Close)
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:a2a-inbound-fed?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "a2a-inbound-fed")})
 	if err != nil {
 		t.Fatal(err)
 	}

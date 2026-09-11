@@ -37,7 +37,7 @@ func TestRequireApprovalBlocksUntilHumanDecision(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable) // Delivery failure must not affect approvals or gateway results.
 	}))
 	defer webhook.Close()
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:approval-e2e?mode=memory&cache=shared", WebhookURL: webhook.URL})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "approval-e2e"), WebhookURL: webhook.URL})
 	if err != nil {
 		t.Fatal(err)
 	}

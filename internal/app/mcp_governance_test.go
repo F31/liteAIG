@@ -89,7 +89,7 @@ func TestMCPAndA2ATrafficIsGoverned(t *testing.T) {
 	}))
 	defer badMCP.Close()
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:mcp-governance?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "mcp-governance")})
 	if err != nil {
 		t.Fatal(err)
 	}

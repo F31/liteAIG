@@ -15,7 +15,7 @@ import (
 func TestGuardrailJudgeBlocksUnrubricedOutput(t *testing.T) {
 	provider := newTestProviderServer(t)
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:judge-cache?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "judge-cache")})
 	if err != nil {
 		t.Fatal(err)
 	}

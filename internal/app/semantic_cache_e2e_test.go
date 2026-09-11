@@ -16,7 +16,7 @@ import (
 func TestSemanticCacheServesSimilarPrompt(t *testing.T) {
 	provider := newTestProviderServer(t)
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:semantic-cache?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "semantic-cache")})
 	if err != nil {
 		t.Fatal(err)
 	}

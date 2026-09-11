@@ -15,7 +15,7 @@ import (
 func bootResponsesGateways(t *testing.T) (string, string) {
 	t.Helper()
 	provider := newTestProviderServer(t)
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:responses-e2e?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "responses-e2e")})
 	if err != nil {
 		t.Fatal(err)
 	}

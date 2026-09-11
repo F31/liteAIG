@@ -159,28 +159,13 @@ func TestA2AInboundStreamingRelaysIncrementalDeltas(t *testing.T) {
 	}
 }
 
-// sanitizeTestName turns a Go test name (which may contain '/' for subtests)
-// into a safe SQLite shared-cache id.
-func sanitizeTestName(name string) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '_'
-	}, name)
-}
-
 // bootGatewayWithLocalA2A boots a Lite instance, completes setup + admin
 // login, and publishes a config whose A2A relay target is the plain local agent
 // reached through remoteURL (no federated relationship needed). It returns the
 // gateway test server and the data-plane virtual key.
 func bootGatewayWithLocalA2A(t *testing.T, remoteURL string) (*httptest.Server, string) {
 	t.Helper()
-	// A per-test shared-cache memory database isolates each test's Lite state
-	// (tenant, agents, relay target, outbox). Reusing one DSN across tests would
-	// leak state between them and flake under heavy parallel load.
-	dsn := "file:a2a-streaming-" + sanitizeTestName(t.Name()) + "?mode=memory&cache=shared"
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: dsn})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "a2a-streaming")})
 	if err != nil {
 		t.Fatal(err)
 	}

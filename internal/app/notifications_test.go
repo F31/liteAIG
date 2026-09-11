@@ -179,7 +179,7 @@ func TestNotificationDisabledAndBlocked(t *testing.T) {
 	if _, _, err := newNotificationSink("http://169.254.169.254/", analytics); err == nil {
 		t.Fatal("metadata destination accepted")
 	}
-	if lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:webhook-blocked?mode=memory&cache=shared", WebhookURL: "http://10.0.0.1/"}); err == nil {
+	if lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "webhook-blocked"), WebhookURL: "http://10.0.0.1/"}); err == nil {
 		_ = lite.Close()
 		t.Fatal("app accepted blocked webhook")
 	}

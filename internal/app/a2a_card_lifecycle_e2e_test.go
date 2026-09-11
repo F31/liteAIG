@@ -102,7 +102,7 @@ func TestA2AAgentCardLifecycleLoop(t *testing.T) {
 	cardV1 := newCardServer(t, "ext-agent", "1", []string{"chat"}, key)
 	cardV2 := newCardServer(t, "ext-agent", "2", []string{"chat", "extra"}, key)
 
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:a2a-card?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "a2a-card")})
 	if err != nil {
 		t.Fatal(err)
 	}

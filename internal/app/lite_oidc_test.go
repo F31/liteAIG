@@ -22,7 +22,7 @@ func newJWKSServer(t *testing.T) *httptest.Server {
 // TestOIDCDisabledByDefault proves the SSO surface is hidden when the
 // composition root gets no OIDC options, and enabled once they are provided.
 func TestOIDCDisabledByDefault(t *testing.T) {
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:oidc-off?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "oidc-off")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestOIDCEndpointsEnabledWhenConfigured(t *testing.T) {
 	defer token.Close()
 
 	lite, err := NewLite(context.Background(), LiteOptions{
-		DSN: "file:oidc-on?mode=memory&cache=shared",
+		DSN: testMemoryDSN(t, "oidc-on"),
 		OIDC: &OIDCOptions{
 			Issuer:                jwks.URL,
 			ClientID:              "liteaig-console",
@@ -95,7 +95,7 @@ func TestOIDCEndpointsEnabledWhenConfigured(t *testing.T) {
 
 func TestOIDCPartialConfigurationFailsStartup(t *testing.T) {
 	if _, err := NewLite(context.Background(), LiteOptions{
-		DSN:  "file:oidc-bad?mode=memory&cache=shared",
+		DSN:  testMemoryDSN(t, "oidc-bad"),
 		OIDC: &OIDCOptions{Issuer: "http://127.0.0.1:1", ClientID: "client"},
 	}); err == nil {
 		t.Fatal("startup succeeded with an incomplete OIDC configuration")

@@ -17,7 +17,7 @@ import (
 func TestLiteManagementPlaneEndToEnd(t *testing.T) {
 	provider := newTestProviderServer(t)
 	lite, err := NewLite(context.Background(), LiteOptions{
-		DSN: "file:lite-e2e?mode=memory&cache=shared",
+		DSN: testMemoryDSN(t, "lite-e2e"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +236,7 @@ func TestLiteManagementPlaneEndToEnd(t *testing.T) {
 
 func TestDataPlaneGatewayEndToEnd(t *testing.T) {
 	provider := newTestProviderServer(t)
-	lite, err := NewLite(context.Background(), LiteOptions{DSN: "file:gateway-e2e?mode=memory&cache=shared"})
+	lite, err := NewLite(context.Background(), LiteOptions{DSN: testMemoryDSN(t, "gateway-e2e")})
 	if err != nil {
 		t.Fatal(err)
 	}
