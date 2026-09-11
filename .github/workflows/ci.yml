@@ -114,22 +114,29 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test with race detector
-        # -json + a jq fail-summary names the failing Test/Package right in
-        # the step annotation, so a runner-only flake is diagnosable from the
-        # public check output instead of needing admin log access.
+        # Serial (-p=1) keeps -race memory use far below the 2-vCPU/4GB hosted
+        # runner budget; parallel packages under -race repeatedly OOM'd, which
+        # surfaces as a package-level fail with no specific test. Failure
+        # details are echoed to stdout and written to the job summary (visible
+        # on the run page) so runner-only failures are diagnosable.
         shell: bash
         run: |
           set -uo pipefail
-          go test -race -count=1 -json ./... 2>/tmp/race-errors.log \
+          go test -race -count=1 -p=1 -json ./... 2>/tmp/race-errors.log \
             | jq -r 'select(.Action=="fail" and (.Test != null or .Package != null)) | "FAIL \(.Package) \(.Test // "")"' \
             > /tmp/race-failures.txt
           status="${PIPESTATUS[0]}"
           echo "go test exit: ${status}"
+          if [ "${status}" -ne 0 ]; then
+            echo "## Race failures" >> "${GITHUB_STEP_SUMMARY}"
+            cat /tmp/race-failures.txt >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+          fi
           while IFS= read -r line; do
             if [ -n "$line" ]; then
               echo "::error::$line"
             fi
-          done < /tmp/race-failures.txt
+          done < /tmp/race-failures.txt || true
+          cat /tmp/race-failures.txt 2>/dev/null || true
           sed -n '1,80p' /tmp/race-errors.log 2>/dev/null || true
           exit "${status}"
 
