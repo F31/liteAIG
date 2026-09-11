@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/F31/liteAIG/internal/platform/storage/postgres"
+	postgrestestutil "github.com/F31/liteAIG/internal/platform/storage/postgres/testutil"
 	"github.com/F31/liteAIG/migrations"
 )
 
@@ -24,13 +25,15 @@ func TestA2APushWorkerTwoGatewayProcessesPostgresRedisDeliversExactlyOnce(t *tes
 	if testing.Short() {
 		t.Skip("skipping Standard-tier process smoke under -short")
 	}
-	dsn := os.Getenv("LITEAIG_TEST_POSTGRES_DSN")
+	if os.Getenv("LITEAIG_TEST_POSTGRES_DSN") == "" {
+		t.Skip("LITEAIG_TEST_POSTGRES_DSN is not configured")
+	}
 	redisURL := os.Getenv("LITEAIG_TEST_REDIS_URL")
 	if redisURL == "" && os.Getenv("LITEAIG_TEST_REDIS_ADDR") != "" {
 		redisURL = "redis://" + os.Getenv("LITEAIG_TEST_REDIS_ADDR") + "/0"
 	}
-	if dsn == "" || redisURL == "" {
-		t.Skip("LITEAIG_TEST_POSTGRES_DSN and LITEAIG_TEST_REDIS_URL/ADDR are required")
+	if redisURL == "" {
+		t.Skip("LITEAIG_TEST_REDIS_URL/ADDR is not configured")
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -39,6 +42,8 @@ func TestA2APushWorkerTwoGatewayProcessesPostgresRedisDeliversExactlyOnce(t *tes
 	t.Setenv("LITEAIG_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	bin, cleanupBin := buildLiteaigBinary(t)
 	defer cleanupBin()
+
+	_, dsn := postgrestestutil.IsolatedDatabase(t)
 
 	const deliveries = 16
 	total := &atomic.Int32{}
@@ -97,11 +102,11 @@ func seedPostgresOutbox(t *testing.T, dsn, callbackURL string, n int) {
 	payload := `{"jsonrpc":"2.0","id":"1","messageId":"m","result":{"message":{"parts":[{"kind":"text","text":"standard"}]}},"task":{"status":"completed"}}`
 	for i := 0; i < n; i++ {
 		taskID := fmt.Sprintf("standard-task-%02d", i)
-		if _, err := db.ExecContext(ctx, `INSERT INTO a2a_tasks(task_id, tenant_id, project_id, request_id, idempotency_key, status) VALUES ($1, $2, $3, $4, $5, 'completed')`, taskID, tenantID, "project-1", taskID, "standard-key-"+taskID); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO a2a_tasks(task_id, tenant_id, project_id, request_id, idempotency_key, status) VALUES ($1, $2, $3, $4, $5, 'completed') ON CONFLICT (tenant_id, task_id) DO NOTHING`, taskID, tenantID, "project-1", taskID, "standard-key-"+taskID); err != nil {
 			t.Fatal(err)
 		}
 		pushID := fmt.Sprintf("standard-push-%02d", i)
-		if _, err := db.ExecContext(ctx, `INSERT INTO a2a_push_outbox(id, tenant_id, task_id, callback_url, bearer_token, payload, status, attempts, max_attempts, next_attempt_at) VALUES ($1, $2, $3, $4, '', $5, 'pending', 0, 3, CURRENT_TIMESTAMP)`, pushID, tenantID, taskID, callbackURL, payload); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO a2a_push_outbox(id, tenant_id, task_id, callback_url, bearer_token, payload, status, attempts, max_attempts, next_attempt_at) VALUES ($1, $2, $3, $4, '', $5, 'pending', 0, 3, CURRENT_TIMESTAMP) ON CONFLICT (id) DO NOTHING`, pushID, tenantID, taskID, callbackURL, payload); err != nil {
 			t.Fatal(err)
 		}
 	}

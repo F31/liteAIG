@@ -3,9 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"net/url"
-	"os"
 	"testing"
 	"time"
 
@@ -14,6 +11,7 @@ import (
 	"github.com/F31/liteAIG/internal/finops/accounting"
 	"github.com/F31/liteAIG/internal/identity/apikey"
 	"github.com/F31/liteAIG/internal/organization"
+	postgrestestutil "github.com/F31/liteAIG/internal/platform/storage/postgres/testutil"
 	"github.com/F31/liteAIG/internal/tenancy"
 	"github.com/F31/liteAIG/internal/tenancy/contracttest"
 	"github.com/F31/liteAIG/migrations"
@@ -171,44 +169,10 @@ func TestOrganizationEffectiveDatedReassignment(t *testing.T) {
 }
 
 // openFreshDatabase returns a dedicated per-test database so destructive
-// conformance reset (DROP SCHEMA) can never collide with another package
-// running migrations against the shared LITEAIG_TEST_POSTGRES_DSN database
-// (chaos/smoke tests). The temporary database is dropped on cleanup.
+// conformance reset never collides with another package running migrations
+// against the shared LITEAIG_TEST_POSTGRES_DSN database. The temporary
+// database is dropped on cleanup.
 func openFreshDatabase(t *testing.T) *sql.DB {
-	t.Helper()
-	dsn := os.Getenv("LITEAIG_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("LITEAIG_TEST_POSTGRES_DSN is not configured")
-	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	name := "liteaig_cf_" + fmt.Sprintf("%d_%d", time.Now().UnixNano(), os.Getpid())
-	admin := *u
-	admin.Path = "/postgres"
-	adminDB, err := sql.Open("pgx", admin.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := adminDB.Exec("CREATE DATABASE \"" + name + "\""); err != nil {
-		adminDB.Close()
-		t.Fatal(err)
-	}
-	adminDB.Close()
-	created := *u
-	created.Path = "/" + name
-	t.Cleanup(func() {
-		cleanupDB, err := sql.Open("pgx", admin.String())
-		if err != nil {
-			return
-		}
-		defer cleanupDB.Close()
-		_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS \"" + name + "\" WITH (FORCE)")
-	})
-	db, err := Open(context.Background(), created.String())
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, _ := postgrestestutil.IsolatedDatabase(t)
 	return db
 }
