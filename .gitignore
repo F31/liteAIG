@@ -1,6 +1,7 @@
 /liteaig
 /bin/
 /logs/
+/graphify-out/
 *.test
 *.out
 *.log
