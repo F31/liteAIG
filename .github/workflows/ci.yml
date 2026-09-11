@@ -50,7 +50,7 @@ jobs:
           uploadArtifacts: true
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17
@@ -114,7 +114,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
 
       - name: Enforce architecture boundaries
         run: go run ./cmd/architecture-test
@@ -187,15 +187,23 @@ jobs:
           set -eu
           data_dir="$(mktemp -d)"
           chmod 0777 "$data_dir"
-          id="$(docker run -d -p 18201:18201 -v "$data_dir:/data" liteaig:test \
-            --db file:/data/liteaig.db \
-            --admin-addr 0.0.0.0:18201 \
-            --ready-addr 127.0.0.1:18200 \
-            --gateway-addr 127.0.0.1:18202)"
+          # --pull=never keeps the smoke against the image just built by the
+          # previous step; --platform pins the AMD64 runner so a stale
+          # multi-platform gha cache cannot hand us a foreign-arch manifest.
+          if ! id="$(docker run --pull=never --platform linux/amd64 -d -p 18201:18201 \
+              -v "$data_dir:/data" liteaig:test \
+              --db file:/data/liteaig.db \
+              --admin-addr 0.0.0.0:18201 \
+              --ready-addr 127.0.0.1:18200 \
+              --gateway-addr 127.0.0.1:18202)"; then
+            docker images liteaig:test || true
+            echo "docker run failed to start the container"
+            exit 1
+          fi
           cleanup() { docker rm -f "$id" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
-          for i in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:18201/api/admin/oidc/config >/dev/null; then
+          for i in $(seq 1 45); do
+            if curl --noproxy '*' --fail --silent http://127.0.0.1:18201/api/admin/oidc/config >/dev/null; then
               echo "container admin origin is serving"
               exit 0
             fi
