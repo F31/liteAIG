@@ -1,8 +1,0 @@
-pyproject.toml
-liteaig/__init__.py
-liteaig/client.py
-liteaig.egg-info/PKG-INFO
-liteaig.egg-info/SOURCES.txt
-liteaig.egg-info/dependency_links.txt
-liteaig.egg-info/top_level.txt
-tests/test_client.py

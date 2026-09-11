@@ -13,6 +13,8 @@ coverage/
 data/
 __pycache__/
 *.pyc
+packages/liteaig-python/build/
+packages/liteaig-python/*.egg-info/
 web/console/node_modules/
 web/console/dist/
 web/console/e2e/.bin/
