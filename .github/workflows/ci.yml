@@ -122,9 +122,14 @@ jobs:
           set -uo pipefail
           go test -race -count=1 -json ./... 2>/tmp/race-errors.log \
             | jq -r 'select(.Action=="fail" and (.Test != null or .Package != null)) | "FAIL \(.Package) \(.Test // "")"' \
-            | tee /tmp/race-failures.txt
+            > /tmp/race-failures.txt
           status="${PIPESTATUS[0]}"
           echo "go test exit: ${status}"
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              echo "::error::$line"
+            fi
+          done < /tmp/race-failures.txt
           sed -n '1,80p' /tmp/race-errors.log 2>/dev/null || true
           exit "${status}"
 
