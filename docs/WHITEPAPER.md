@@ -303,7 +303,7 @@ Standard 档在 Postgres 上启用**行级安全（RLS）**作为第二道防线
 ## 十一、边界与后续方向
 
 - **能力域边界**：不做 Agent Runtime/Workflow、RAG、Prompt IDE、模型训练、通用网络网关（见 §1.2）。
-- **后续重点**（既有路线图）：K8s 多副本 Standard 拓扑的 `scripts/kind-standard-e2e.sh` 已在本地 kind 全链路跑通（setup→多副本收敛→pod 杀恢复→readyz），等待 `k8s-kind-standard` CI 首次 green；随后推进多租户 SaaS、MCP Tasks、通知渠道扩展等产品决策项。
+- **后续重点**（既有路线图）：K8s 多副本 Standard 拓扑已由 `scripts/kind-standard-e2e.sh` 本地实机与 GitHub Actions `k8s-kind-standard` 双重验证（setup→多副本收敛→pod 杀恢复→readyz），B3 已正式关闭；后续推进多租户 SaaS、MCP Tasks、通知渠道扩展等产品决策项。
 - **运维建议**：Standard 档生产部署请遵循 `docs/DEPLOYMENT.md`、`docs/RELEASE.md`、`docs/UPGRADE_DRILL.md`，并启用 CI 中的官方 SDK conformance 与 govulncheck 门禁。
 
 ---

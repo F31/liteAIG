@@ -64,6 +64,8 @@
 
 **2026-09-11 更新（B3/稳定闭环）**：K8s 多副本 Standard e2e 已在本地 kind 实机全链路跑通（`kind standard e2e passed`）。期间修复三处缺口以让脚本在受限网络/本地代理环境可复跑且仍是 CI 等价：`sqlite.Open` 对 in-memory DSN 固定单连接，消除 `TestSingletonReleasesLeaseOnShutdown` 全量偶发 `no such table`；`038_gemini_native_catalog.sql` 补 `-- owner: catalog`，修复 `TestEveryMigrationDeclaresOwner`；`kind-standard-e2e.sh` 给 Postgres 加 `pg_isready` startup/readiness probe（此前 `rollout status` 在 DB 未就绪时放行，gateway 与 DB init 竞态导致 setup 失败）并为 setup/readyz 的 `curl` 加 `--noproxy '*'`（本地存在 HTTP(S)_PROXY 时被劫持，CI 无代理时 no-op）。验证：`go test ./... -count=1` 98 包全绿、0 失败；`scripts/check-k8s.sh` helm lint/template 通过；`cmd/architecture-test` boundaries ok。
 
+**2026-09-12 更新（B3 正式关闭）**：GitHub Actions `ci` 与 `sdk-conformance` run #19 在 commit `8a42490` 全部成功，`quality`（含 Postgres/Redis-backed 全仓 race）、`k8s-kind-standard`、image、Console、SDK packages、secrets、K8s manifest 与官方 SDK conformance 均 green。最终 race flaky 的真实根因通过新增的 `race-diagnostics` artifact 定位为多个 Lite test fixture 复用固定 SQLite named-memory DSN：前一 fixture 的后台连接仍在清理时，后一 fixture 可读到由不同 master key 加密的 persisted pepper，触发 `cipher: message authentication failed`。`testMemoryDSN` 现在为每次 Lite fixture 启动生成唯一 shared-cache DSN，并覆盖所有 19 个非持久化测试入口；restart/durability/two-process 等有意共享数据库的测试保持不变。验证：Responses E2E race 20/20、`internal/app` race、CI 等价 `go test -race -count=1 -p=1 ./...` 与 GitHub Actions #19 均通过。CI 失败时会保留完整 `race.jsonl`、还原后的 output/stderr、环境与失败列表 artifact，后续 runner-only 故障无需依赖管理员日志权限。
+
 **2026-09-10 更新（A1）**：Batch/files artifact 治理第一步已落地：OpenAI Batch response now parses `output_file_id`/`error_file_id`；Gateway 在 batch create/retrieve 成功后把这些 file IDs 写入新增 `file_mappings`（`042_batch_artifact_mappings.sql`），`GET /v1/files/{id}/content` 只允许访问已学习到的 file ID，并通过 `file_id -> logical_model` 回到同一 governed pipeline/connector 路径；未知 file ID 返回 404，避免客户端任意选择上游 files。Files upload/list/retrieve/delete 第一切片也已接入：`POST /v1/files` 使用 LiteAIG 扩展 multipart `model` 字段做 logical-model 路由并在上游转发时剥离；上传成功后保存 `file_id -> logical_model`；`GET /v1/files?model=...` 通过显式 model 列表；`GET /v1/files/{id}`/`DELETE /v1/files/{id}` 通过持久映射回同一治理路径；delete 成功后撤销本地 file mapping，防止 stale mapping 继续授权后续 retrieve/content。OpenAI connector 新增 `/v1/files` 与 `/v1/files/{id}`/`content` 原生转发。文件 upload/retrieve/delete/content 成功完成后会发出 redacted `file.access` DomainEvent（operation/file_id/logical_model/deployment_id/outcome），不包含文件内容或文件名。Batch input artifact scanning 已接入输入护栏：`RequestFile{operation:"upload"}` 会扫描上传 bytes，block 命中直接阻断，redact 命中会改写上传内容后再转发。本地 mapping retention foundation 已补 `PurgeFileMappingsOlderThan`，后续 sweeper/策略可按保留窗口清理本地授权映射；当前不自动删除上游文件，避免无产品策略时误删。
 
 ---
@@ -84,7 +86,7 @@
 
 | # | 差距 | 证据 | 建议动作 |
 |---|---|---|---|
-| B3 | **真实 K8s 多副本 Standard 集群 e2e 已本地全链路 green**：`scripts/kind-standard-e2e.sh`（宿主预拉+加载 postgres/redis/provider 镜像、Helm 2 副本 mode=all、setup 向导、pod 杀恢复、/readyz 探测）与 `ci.yml` `k8s-kind-standard` job 已接线；**2026-09-11 本地 kind 实机完整跑通并通过（`kind standard e2e passed`）**，期间修复两处脚本健壮性缺口：Postgres 缺 readiness/startup probe（`pg_isready`）导致 gateway 与 DB init 竞态进而 setup 失败；setup/readyz 的 `curl` 在有 HTTP(S)_PROXY 环境被劫持，加 `--noproxy '*'`（CI 无代理时 no-op，对产物/依赖无影响） | `scripts/kind-standard-e2e.sh`；`.github/workflows/ci.yml` | 等待网络正常的 CI runner 首次 green 后正式关闭 |
+| B3 | ✅ **真实 K8s 多副本 Standard 集群 e2e 已关闭**：`scripts/kind-standard-e2e.sh` 覆盖 Helm 2 副本 mode=all、setup、配置收敛、pod 杀恢复与 `/readyz`；本地 kind 实机通过，GitHub Actions run #19 的 `k8s-kind-standard` 与完整 `ci`/`sdk-conformance` 全绿；race 测试固定 named-memory DB 污染已用 per-fixture `testMemoryDSN` 系统性消除，失败诊断 artifact 已固化 | `scripts/kind-standard-e2e.sh`；`.github/workflows/ci.yml`；`internal/app/testdb_test.go` | 保持常态化门禁；后续 flaky 直接基于 `race-diagnostics` artifact 定位 |
 
 ---
 
@@ -106,9 +108,8 @@
 
 ## 五、建议执行顺序
 
-1. **B3**：本地 kind Standard e2e 已全链路 green；等待 `k8s-kind-standard` CI 首次 green 后正式关闭。
-2. **C 类其余**：C1/C2/C3/C4/C5/C6/C7/C8/C9 与 A2 最小切片均已落地；完整 SaaS 能力并入 A4。
-3. **A 类**：A2/A3 可作为产品候选；A1/A4/A5 需要明确需求与投资决策。
+1. **C 类其余**：B3 已正式关闭；C1/C2/C3/C4/C5/C6/C7/C8/C9 与 A2 最小切片均已落地；完整 SaaS 能力并入 A4。
+2. **A 类**：A2/A3 可作为产品候选；A1/A4/A5 需要明确需求与投资决策。
 
 ---
 
