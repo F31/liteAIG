@@ -114,31 +114,64 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test with race detector
-        # Serial (-p=1) keeps -race memory use far below the 2-vCPU/4GB hosted
-        # runner budget; parallel packages under -race repeatedly OOM'd, which
-        # surfaces as a package-level fail with no specific test. Failure
-        # details are echoed to stdout and written to the job summary (visible
-        # on the run page) so runner-only failures are diagnosable.
+        id: race
+        # Keep package execution serial while diagnosing the runner-only
+        # failure. Preserve the complete JSON stream because the useful race,
+        # panic, and assertion details are carried by Action=output records.
         shell: bash
         run: |
           set -uo pipefail
-          go test -race -count=1 -p=1 -json ./... 2>/tmp/race-errors.log \
-            | jq -r 'select(.Action=="fail" and (.Test != null or .Package != null)) | "FAIL \(.Package) \(.Test // "")"' \
-            > /tmp/race-failures.txt
-          status="${PIPESTATUS[0]}"
+          {
+            go version
+            printf 'CPUs: '
+            nproc
+            free -h
+            df -h / /tmp
+          } | tee /tmp/race-environment.log
+
+          set +e
+          go test -race -count=1 -p=1 -json ./... \
+            > /tmp/race.jsonl 2> /tmp/race-stderr.log
+          status="$?"
+          set -e
+
+          jq -r 'select(.Action=="fail" and (.Test != null or .Package != null)) | "FAIL \(.Package) \(.Test // "")"' \
+            /tmp/race.jsonl > /tmp/race-failures.txt
+          jq -r 'select(.Action=="output") | .Output' \
+            /tmp/race.jsonl > /tmp/race-output.log
           echo "go test exit: ${status}"
           if [ "${status}" -ne 0 ]; then
-            echo "## Race failures" >> "${GITHUB_STEP_SUMMARY}"
-            cat /tmp/race-failures.txt >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+            {
+              echo "## Race failures"
+              echo '```text'
+              cat /tmp/race-failures.txt
+              echo '```'
+              echo "Full JSON and text output are attached as the race-diagnostics artifact."
+            } >> "${GITHUB_STEP_SUMMARY}"
           fi
-          while IFS= read -r line; do
-            if [ -n "$line" ]; then
-              echo "::error::$line"
-            fi
-          done < /tmp/race-failures.txt || true
-          cat /tmp/race-failures.txt 2>/dev/null || true
-          sed -n '1,80p' /tmp/race-errors.log 2>/dev/null || true
+
+          echo "=== failing tests/packages ==="
+          cat /tmp/race-failures.txt
+          echo "=== failure context ==="
+          grep -n -B 20 -A 40 -E -- '--- FAIL:|WARNING: DATA RACE|panic:|fatal error:|signal:|timed out|no such table|connection refused' \
+            /tmp/race-output.log || true
+          echo "=== stderr ==="
+          cat /tmp/race-stderr.log
           exit "${status}"
+
+      - name: Upload race diagnostics
+        if: failure() && steps.race.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: race-diagnostics-${{ github.run_attempt }}
+          path: |
+            /tmp/race.jsonl
+            /tmp/race-output.log
+            /tmp/race-stderr.log
+            /tmp/race-failures.txt
+            /tmp/race-environment.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Enforce architecture boundaries
         run: go run ./cmd/architecture-test
