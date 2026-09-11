@@ -114,7 +114,19 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test with race detector
-        run: go test -race -count=1 ./...
+        # -json + a jq fail-summary names the failing Test/Package right in
+        # the step annotation, so a runner-only flake is diagnosable from the
+        # public check output instead of needing admin log access.
+        shell: bash
+        run: |
+          set -uo pipefail
+          go test -race -count=1 -json ./... 2>/tmp/race-errors.log \
+            | jq -r 'select(.Action=="fail" and (.Test != null or .Package != null)) | "FAIL \(.Package) \(.Test // "")"' \
+            | tee /tmp/race-failures.txt
+          status="${PIPESTATUS[0]}"
+          echo "go test exit: ${status}"
+          sed -n '1,80p' /tmp/race-errors.log 2>/dev/null || true
+          exit "${status}"
 
       - name: Enforce architecture boundaries
         run: go run ./cmd/architecture-test
@@ -178,6 +190,10 @@ jobs:
         with:
           context: .
           push: false
+          # load makes the image available to the local docker daemon so the
+          # smoke step can `docker run` it; without it the image only lives in
+          # the buildx cache.
+          load: true
           tags: liteaig:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
