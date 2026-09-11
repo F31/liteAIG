@@ -105,7 +105,13 @@ jobs:
         run: go vet ./...
 
       - name: Scan Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        # Pin govulncheck: @latest can drift to a version requiring a newer Go
+        # toolchain than setup-go 1.25.x and fail on the runner's auto toolchain
+        # download. GOTOOLCHAIN=auto mirrors local behavior so a switch is
+        # explicit, not a hidden env difference.
+        env:
+          GOTOOLCHAIN: auto
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test with race detector
         run: go test -race ./...
