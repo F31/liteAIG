@@ -1,0 +1,1 @@
+{"profile":"phase0-2026-08-27","openai":{"sdk":"openai","version":"7.8.0","endpoints":["/v1/chat/completions","/v1/responses","/v1/embeddings","/v1/models"],"multimodal":true},"anthropic":{"sdk":"@anthropic-ai/sdk","version":"0.122.0","endpoints":["/v1/messages"],"multimodal":true}}

@@ -1,0 +1,79 @@
+{
+  "corpus_version": "2026.09.1",
+  "engine_version": "1",
+  "params": "default builtin policy v1",
+  "category": [
+    {
+      "category": "prompt_injection",
+      "language": "en",
+      "tp": 3,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "false_positive_rate": 0,
+      "false_negative_rate": 0
+    },
+    {
+      "category": "secret",
+      "language": "en",
+      "tp": 1,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "false_positive_rate": 0,
+      "false_negative_rate": 0
+    },
+    {
+      "category": "pii",
+      "language": "en",
+      "tp": 3,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "false_positive_rate": 0,
+      "false_negative_rate": 0
+    },
+    {
+      "category": "safety",
+      "language": "en",
+      "tp": 2,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "false_positive_rate": 0,
+      "false_negative_rate": 0
+    },
+    {
+      "category": "safety",
+      "language": "es",
+      "tp": 0,
+      "fp": 0,
+      "tn": 1,
+      "fn": 0,
+      "precision": 0,
+      "recall": 0,
+      "false_positive_rate": 0,
+      "false_negative_rate": 0
+    }
+  ],
+  "overall": {
+    "category": "all",
+    "language": "all",
+    "tp": 9,
+    "fp": 0,
+    "tn": 7,
+    "fn": 0,
+    "precision": 1,
+    "recall": 1,
+    "false_positive_rate": 0,
+    "false_negative_rate": 0
+  }
+}

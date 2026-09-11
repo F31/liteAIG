@@ -1,0 +1,1 @@
+{"model":"claude-test","system":"be concise","messages":[{"role":"user","content":"hello"}],"max_tokens":128,"stream":false,"top_k":4}

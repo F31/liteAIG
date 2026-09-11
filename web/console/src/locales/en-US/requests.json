@@ -1,0 +1,13 @@
+{
+  "details": {
+    "key": "API key",
+    "route": "Route evidence",
+    "attempts": "Attempts",
+    "guardrail": "Guardrail",
+    "cost": "Provider cost",
+    "latency": "Latency",
+    "snapshot": "Snapshot version",
+    "security": "Security epoch",
+    "source": "Source"
+  }
+}

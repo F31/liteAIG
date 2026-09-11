@@ -1,0 +1,22 @@
+/liteaig
+/bin/
+/logs/
+*.test
+*.out
+*.log
+coverage/
+*.masterkey
+*.key
+.env
+.env.*
+data/
+web/console/node_modules/
+web/console/dist/
+web/console/e2e/.bin/
+web/console/*.tsbuildinfo
+web/console/vite.config.d.ts
+tests/contract/sdk/node_modules/
+# Lighthouse accidentally running from the repo root can drop a Chrome profile
+# tree here; never capture browser data or WSL-mapped junk paths.
+web/console/**/AppData/Local/lighthouse.*/
+web/console/**/wsl.localhost*/

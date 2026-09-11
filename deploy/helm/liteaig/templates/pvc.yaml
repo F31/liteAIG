@@ -1,0 +1,23 @@
+{{- range $name, $workload := .Values.workloads }}
+{{- $db := default dict $workload.database }}{{- if and $workload.enabled $db.enabled }}
+{{- if not $.Values.database.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "liteaig.fullname" $ }}-data
+  labels:
+    {{- include "liteaig.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if $.Values.database.storageClass }}
+  storageClassName: {{ $.Values.database.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $.Values.database.size }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

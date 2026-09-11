@@ -1,0 +1,15 @@
+{
+  "fields": {
+    "username": "Administrator username",
+    "adminPassword": "Administrator password",
+    "providerType": "Provider type",
+    "providerEndpoint": "Provider endpoint",
+    "selectedModel": "Selected model"
+  },
+  "validation": {
+    "required": "This field is required",
+    "adminPasswordMin": "Administrator password must be at least 8 characters",
+    "url": "Enter a valid URL, for example https://api.example.com"
+  },
+  "result": { "sdk": "SDK configuration", "request": "First request" }
+}

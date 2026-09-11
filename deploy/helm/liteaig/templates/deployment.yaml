@@ -1,0 +1,126 @@
+{{- range $name, $workload := .Values.workloads }}
+{{- if $workload.enabled }}
+{{- $db := default dict $workload.database }}
+{{- include "liteaig.validateWorkload" (dict "root" $ "name" $name "workload" $workload) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "liteaig.workloadName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "liteaig.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $workload.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ $workload.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ $workload.rollingUpdate.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "liteaig.serviceAccountName" $ }}
+      terminationGracePeriodSeconds: {{ $.Values.drain.terminationGracePeriodSeconds }}
+      {{- if $.Values.priorityClass.name }}
+      priorityClassName: {{ $.Values.priorityClass.name }}
+      {{- else if $.Values.priorityClass.create }}
+      priorityClassName: {{ include "liteaig.fullname" $ }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: {{ $.Values.topology.maxSkew }}
+          topologyKey: {{ $.Values.topology.key }}
+          whenUnsatisfiable: {{ $.Values.topology.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 14 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 20 }}
+      {{- if $db.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{- if $.Values.database.existingClaim }} {{ $.Values.database.existingClaim }}{{- else }} {{ include "liteaig.fullname" $ }}-data{{- end }}
+      {{- end }}
+      containers:
+        - name: liteaig
+          image: "{{ $.Values.image.repository }}:{{ default $.Chart.AppVersion $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args:
+            - --mode={{ $workload.mode }}
+            - --ready-addr=:8080
+            - --drain-timeout={{ $.Values.drain.drainTimeoutSeconds }}s
+            - --stream-drain-timeout={{ $.Values.drain.streamDrainTimeoutSeconds }}s
+            - --force-shutdown-timeout={{ $.Values.drain.forceShutdownTimeoutSeconds }}s
+            {{- if or (eq $workload.mode "all") (eq $workload.mode "control") }}
+            - --admin-addr=:8081
+            {{- end }}
+            {{- if or (eq $workload.mode "all") (eq $workload.mode "gateway") }}
+            - --gateway-addr=:8082
+            {{- end }}
+            {{- if $db.enabled }}
+            - --db=file:{{ $db.dir }}/liteaig.db
+            {{- end }}
+            {{- range $arg := $workload.extraArgs }}
+            - {{ $arg | quote }}
+            {{- end }}
+          {{- if $db.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ $db.dir }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          {{- if $.Values.existingSecret.name }}
+          {{- if $.Values.existingSecret.envFrom }}
+          envFrom:
+            - secretRef:
+                name: {{ $.Values.existingSecret.name }}
+          {{- end }}
+          {{- end }}
+          {{- if or (and $.Values.existingSecret.name (not $.Values.existingSecret.envFrom)) $workload.extraEnv }}
+          env:
+            {{- if and $.Values.existingSecret.name (not $.Values.existingSecret.envFrom) }}
+            - name: LITEAIG_SECRET_REF
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret.name }}
+                  key: secret_ref
+            {{- end }}
+            {{- with $workload.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml $workload.resources | nindent 12 }}
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,140 @@
+rules:
+  - name: kernel-is-business-neutral
+    from: internal/kernel
+    deny:
+      - internal/access
+      - internal/catalog
+      - internal/policy
+      - internal/guardrail
+      - internal/routing
+      - internal/resilience
+      - internal/finops
+      - internal/connectors
+      - internal/controlplane
+      - internal/platform
+  - name: protocol-adapters-use-kernel-contracts
+    from: internal/access/protocol
+    deny:
+      - internal/policy
+      - internal/guardrail
+      - internal/routing
+      - internal/resilience
+      - internal/finops
+      - internal/connectors
+  - name: connectors-do-not-govern
+    from: internal/connectors
+    deny:
+      - internal/policy
+      - internal/guardrail
+      - internal/routing
+      - internal/resilience
+      - internal/finops
+  - name: data-plane-does-not-read-control-plane
+    from: internal/gateway
+    deny:
+      - internal/controlplane
+  - name: domains-do-not-use-concrete-storage
+    from: internal/tenancy
+    deny: [internal/platform/storage]
+  - name: identity-does-not-use-concrete-storage
+    from: internal/identity
+    deny: [internal/platform/storage]
+  - name: catalog-does-not-use-concrete-storage
+    from: internal/catalog
+    deny: [internal/platform/storage]
+  - name: policy-does-not-use-concrete-storage
+    from: internal/policy
+    deny: [internal/platform/storage]
+  - name: guardrail-does-not-use-concrete-storage
+    from: internal/guardrail
+    deny: [internal/platform/storage]
+  - name: routing-does-not-use-concrete-storage
+    from: internal/routing
+    deny: [internal/platform/storage]
+  - name: resilience-does-not-use-concrete-storage
+    from: internal/resilience
+    deny: [internal/platform/storage]
+  - name: finops-does-not-use-concrete-storage
+    from: internal/finops
+    deny: [internal/platform/storage]
+  - name: organization-does-not-use-concrete-storage
+    from: internal/organization
+    deny: [internal/platform/storage]
+  - name: coordination-is-implementation-free
+    from: internal/platform/coordination
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/finops
+      - internal/organization
+  - name: kernel-does-not-use-coordination
+    from: internal/kernel
+    deny: [internal/platform/coordination]
+  - name: storage-does-not-use-presentation
+    from: internal/platform/storage
+    deny: [internal/controlplane/adminapi]
+  - name: backend-orchestration-is-presentation-free
+    from: internal/controlplane/backend
+    deny: [internal/controlplane/adminapi, internal/gateway, internal/app]
+  - name: webkit-is-implementation-free
+    from: internal/platform/webkit
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/identity
+      - internal/tenancy
+      - internal/finops
+      - internal/organization
+      - internal/catalog
+      - internal/policy
+      - internal/guardrail
+      - internal/routing
+      - internal/resilience
+      - internal/connectors
+      - internal/gateway
+      - internal/app
+  - name: catalog-is-implementation-free
+    from: internal/catalog
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/identity
+      - internal/tenancy
+      - internal/finops
+      - internal/organization
+      - internal/gateway
+      - internal/app
+  - name: audit-is-implementation-free
+    from: internal/observability/audit
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/identity
+      - internal/tenancy
+      - internal/finops
+      - internal/organization
+      - internal/gateway
+      - internal/app
+  - name: tenancy-does-not-use-presentation
+    from: internal/tenancy
+    deny: [internal/controlplane/adminapi, internal/gateway, internal/app]
+  - name: identity-does-not-use-presentation
+    from: internal/identity
+    deny: [internal/controlplane/adminapi, internal/gateway, internal/app]
+  - name: secret-provider-is-implementation-free
+    from: internal/platform/secrets
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/finops
+      - internal/organization
+      - internal/connectors
+      - internal/gateway
+  - name: accounting-spool-is-platform-storage
+    from: internal/platform/storage/spool
+    deny:
+      - internal/kernel
+      - internal/controlplane
+      - internal/gateway
+      - internal/resilience
+      - internal/organization

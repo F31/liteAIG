@@ -1,0 +1,50 @@
+module_path: github.com/F31/liteAIG
+modules:
+  - name: app
+    path: internal/app
+  - name: architecture
+    path: internal/architecture
+  - name: kernel
+    path: internal/kernel
+  - name: access
+    path: internal/access
+  - name: gateway
+    path: internal/gateway
+  - name: tenancy
+    path: internal/tenancy
+  - name: identity
+    path: internal/identity
+  - name: catalog
+    path: internal/catalog
+  - name: policy
+    path: internal/policy
+  - name: guardrail
+    path: internal/guardrail
+  - name: cache
+    path: internal/cache
+  - name: routing
+    path: internal/routing
+  - name: resilience
+    path: internal/resilience
+  - name: finops
+    path: internal/finops
+  - name: organization
+    path: internal/organization
+  - name: federation
+    path: internal/federation
+  - name: agentic
+    path: internal/agentic
+  - name: connectors
+    path: internal/connectors
+  - name: controlplane
+    path: internal/controlplane
+  - name: observability
+    path: internal/observability
+  - name: platform
+    path: internal/platform
+  - name: contextguard
+    path: internal/contextguard
+  - name: tokenizer
+    path: internal/tokenizer
+  - name: loadtest
+    path: internal/loadtest

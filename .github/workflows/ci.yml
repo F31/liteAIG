@@ -1,0 +1,252 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+      - name: Install Console dependencies
+        run: npm ci
+        working-directory: web/console
+      - name: Check Console
+        run: npm run check
+        working-directory: web/console
+      - name: Audit Console production dependencies
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: web/console
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+      - name: Install SDK contract dependencies
+        run: npm ci
+        working-directory: tests/contract/sdk
+      - name: Run official SDK compatibility contract
+        run: npm test
+        working-directory: tests/contract/sdk
+      - name: Start Console preview
+        run: npm run preview -- --host 127.0.0.1 &
+        working-directory: web/console
+      - name: Wait for Console preview
+        run: for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4173/dashboard >/dev/null && exit 0; sleep 1; done; exit 1
+      - name: Lighthouse accessibility gate
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: web/console/lighthouserc.json
+          uploadArtifacts: true
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: liteaig_test
+          POSTGRES_USER: liteaig
+          POSTGRES_PASSWORD: liteaig_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U liteaig -d liteaig_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      LITEAIG_TEST_POSTGRES_DSN: postgres://liteaig:liteaig_test@localhost:5432/liteaig_test?sslmode=disable
+      LITEAIG_TEST_REDIS_ADDR: localhost:6379
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Verify module files
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Scan Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Enforce architecture boundaries
+        run: go run ./cmd/architecture-test
+
+      - name: Guardrail benchmark report
+        run: go run ./cmd/benchmark --baseline tests/benchmark/baseline-report.json --out /tmp/benchmark-report.json
+
+      - name: Upload guardrail benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrail-benchmark-report
+          path: /tmp/benchmark-report.json
+
+      - name: Build single binary
+        run: go build -o /tmp/liteaig ./cmd/liteaig
+
+      - name: Install OpenSpec
+        run: npm install --global @fission-ai/openspec@1.3.1
+
+      - name: Validate OpenSpec
+        run: openspec validate --all --strict
+
+  sdk-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Check SDK packages
+        run: bash scripts/check-sdks.sh
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: liteaig:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke the container (non-root, mounted SQLite data dir)
+        run: |
+          set -eu
+          data_dir="$(mktemp -d)"
+          chmod 0777 "$data_dir"
+          id="$(docker run -d -p 18201:18201 -v "$data_dir:/data" liteaig:test \
+            --db file:/data/liteaig.db \
+            --admin-addr 0.0.0.0:18201 \
+            --ready-addr 127.0.0.1:18200 \
+            --gateway-addr 127.0.0.1:18202)"
+          cleanup() { docker rm -f "$id" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18201/api/admin/oidc/config >/dev/null; then
+              echo "container admin origin is serving"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$id" || true
+          echo "container did not become ready"
+          exit 1
+
+  k8s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install kubeconform
+        run: |
+          set -eu
+          version="0.6.7"
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/v${version}/kubeconform-linux-amd64.tar.gz" | sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Validate Kubernetes manifests
+        run: scripts/check-k8s.sh
+
+  k8s-kind-standard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Run kind Standard multi-replica e2e
+        run: scripts/kind-standard-e2e.sh
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

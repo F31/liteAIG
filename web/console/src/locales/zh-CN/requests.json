@@ -1,0 +1,13 @@
+{
+  "details": {
+    "key": "API 密钥",
+    "route": "路由证据",
+    "attempts": "调用尝试",
+    "guardrail": "安全护栏",
+    "cost": "供应商成本",
+    "latency": "延迟",
+    "snapshot": "快照版本",
+    "security": "安全纪元",
+    "source": "来源"
+  }
+}

@@ -1,0 +1,8 @@
+LiteAIG Standard/Enterprise HA chart rendered.
+
+Health endpoints:
+  startup/liveness: /healthz
+  readiness: /readyz
+
+Secrets are referenced by name only. Do not place plaintext provider credentials
+in Helm values or rendered manifests.

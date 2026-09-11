@@ -1,0 +1,15 @@
+{
+  "fields": {
+    "username": "管理员用户名",
+    "adminPassword": "管理员密码",
+    "providerType": "供应商类型",
+    "providerEndpoint": "供应商端点",
+    "selectedModel": "选择模型"
+  },
+  "validation": {
+    "required": "此项必填",
+    "adminPasswordMin": "管理员密码至少需要 8 位",
+    "url": "请输入有效的 URL，例如 https://api.example.com"
+  },
+  "result": { "sdk": "SDK 配置", "request": "首次请求" }
+}

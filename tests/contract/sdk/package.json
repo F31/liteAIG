@@ -1,0 +1,1 @@
+{"name":"@liteaig/sdk-contract","private":true,"type":"module","scripts":{"test":"node smoke.mjs"},"dependencies":{"@anthropic-ai/sdk":"0.122.0","openai":"7.8.0"}}

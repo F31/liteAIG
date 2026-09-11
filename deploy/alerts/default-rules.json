@@ -1,0 +1,46 @@
+[
+  {
+    "id": "dr-budget-soft",
+    "name": "Soft budget threshold crossed",
+    "ruleType": "budget",
+    "metric": "budget.usage",
+    "operator": "gte",
+    "threshold": 0.8,
+    "windowSeconds": 3600,
+    "severity": "medium",
+    "enabled": true
+  },
+  {
+    "id": "dr-budget-hard",
+    "name": "Hard budget threshold crossed",
+    "ruleType": "budget",
+    "metric": "budget.usage",
+    "operator": "gte",
+    "threshold": 1.0,
+    "windowSeconds": 3600,
+    "severity": "high",
+    "enabled": true
+  },
+  {
+    "id": "dr-request-spike",
+    "name": "Request rate spike",
+    "ruleType": "rate",
+    "metric": "rate.requests_per_minute",
+    "operator": "gte",
+    "threshold": 2000,
+    "windowSeconds": 300,
+    "severity": "low",
+    "enabled": true
+  },
+  {
+    "id": "dr-cost-anomaly",
+    "name": "Provider cost anomaly",
+    "ruleType": "cost_anomaly",
+    "metric": "cost.anomaly_score",
+    "operator": "gte",
+    "threshold": 3.0,
+    "windowSeconds": 3600,
+    "severity": "high",
+    "enabled": true
+  }
+]

@@ -1,0 +1,18 @@
+{{- range $name, $workload := .Values.workloads }}
+{{- if $workload.enabled }}
+{{- include "liteaig.validateWorkload" (dict "root" $ "name" $name "workload" $workload) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "liteaig.workloadName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "liteaig.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  minAvailable: {{ $workload.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 6 }}
+---
+{{- end }}
+{{- end }}

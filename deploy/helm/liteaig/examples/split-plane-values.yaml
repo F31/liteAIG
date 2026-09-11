@@ -1,0 +1,85 @@
+# Example Standard-tier split-plane deployment values. Secrets are referenced,
+# not inlined: create `liteaig-standard` with database_dsn, coordinator_url,
+# liteaig_master_key, bundle_token, bundle_signing_key, and bundle_public_key.
+existingSecret:
+  name: liteaig-standard
+  envFrom: false
+
+workloads:
+  gateway:
+    enabled: true
+    mode: gateway
+    replicas: 3
+    database:
+      enabled: false
+      dir: /data
+    extraArgs:
+      - --db=$(LITEAIG_DATABASE_DSN)
+      - --coordinator=$(LITEAIG_COORDINATOR_URL)
+      - --control-url=http://liteaig-liteaig-control:8080
+      - --bundle-token=$(LITEAIG_BUNDLE_TOKEN)
+      - --bundle-public-key=$(LITEAIG_BUNDLE_PUBLIC_KEY)
+    extraEnv:
+      - name: LITEAIG_DATABASE_DSN
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: database_dsn
+      - name: LITEAIG_COORDINATOR_URL
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: coordinator_url
+      - name: LITEAIG_MASTER_KEY
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: liteaig_master_key
+      - name: LITEAIG_BUNDLE_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: bundle_token
+      - name: LITEAIG_BUNDLE_PUBLIC_KEY
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: bundle_public_key
+  control:
+    enabled: true
+    mode: control
+    replicas: 2
+    database:
+      enabled: false
+      dir: /data
+    extraArgs:
+      - --db=$(LITEAIG_DATABASE_DSN)
+      - --coordinator=$(LITEAIG_COORDINATOR_URL)
+      - --bundle-token=$(LITEAIG_BUNDLE_TOKEN)
+      - --bundle-signing-key=$(LITEAIG_BUNDLE_SIGNING_KEY)
+    extraEnv:
+      - name: LITEAIG_DATABASE_DSN
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: database_dsn
+      - name: LITEAIG_COORDINATOR_URL
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: coordinator_url
+      - name: LITEAIG_MASTER_KEY
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: liteaig_master_key
+      - name: LITEAIG_BUNDLE_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: bundle_token
+      - name: LITEAIG_BUNDLE_SIGNING_KEY
+        valueFrom:
+          secretKeyRef:
+            name: liteaig-standard
+            key: bundle_signing_key

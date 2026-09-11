@@ -1,0 +1,14 @@
+.git
+.gitignore
+.github
+docs
+deploy
+
+**/node_modules
+**/test-results
+web/console/e2e/.bin
+
+*.db
+*.db-wal
+*.db-shm
+*.masterkey

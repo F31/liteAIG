@@ -1,0 +1,13 @@
+title = "LiteAIG gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build artifacts and vendored dependencies"
+paths = [
+  '''web/console/dist/.*''',
+  '''web/console/node_modules/.*''',
+  '''tests/contract/sdk/node_modules/.*''',
+  '''graphify-out/.*''',
+]

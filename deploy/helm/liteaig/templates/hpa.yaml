@@ -1,0 +1,33 @@
+{{- range $name, $workload := .Values.workloads }}
+{{- if and $workload.enabled $workload.autoscaling.enabled }}
+{{- include "liteaig.validateWorkload" (dict "root" $ "name" $name "workload" $workload) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "liteaig.workloadName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "liteaig.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "liteaig.workloadName" (dict "root" $ "name" $name) }}
+  minReplicas: {{ $workload.autoscaling.minReplicas }}
+  maxReplicas: {{ $workload.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $workload.autoscaling.scaleDownStabilizationSeconds }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $workload.autoscaling.targetCPUUtilizationPercentage }}
+    {{- with $workload.autoscaling.customMetrics }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- end }}

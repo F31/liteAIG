@@ -1,0 +1,79 @@
+schema: spec-driven
+
+context: |
+  LiteAIG v7.2 is an Enterprise AI Governance & Agentic Traffic Control Plane.
+  The authoritative design baseline is docs/LiteAIG_AI_Gateway_V7.2.md.
+  Backend: Go modular monolith, single binary by default, SQLite for Lite and
+  PostgreSQL plus Valkey/Redis for Standard. Frontend: React, TypeScript, Vite,
+  Ant Design 5/ProComponents, TanStack Query, ECharts, and SSE.
+  The Data Plane uses a compile-time-fixed seven-stage pipeline and reads only
+  immutable GlobalRuntime/TenantRuntimeSnapshot configuration. Tenant is the
+  highest isolation boundary and Project is the mandatory governance boundary.
+  Protocol adapters only normalize wire protocols. Connectors only invoke
+  upstream Models, Tools, or Agents. Governance always executes in the pipeline.
+  Development is phased. A later phase MUST NOT enter production scope until the
+  preceding phase DoD and applicable Golden Scenarios pass.
+
+  Cross-cutting engineering principles:
+
+  1. Extensibility without speculative abstraction. Backend and Console code
+     MUST NOT embed environment-specific values, tenant policy, provider
+     capability, pricing, limits, navigation visibility, or other expected-to-
+     change behavior in scattered constants or conditionals. Variable behavior
+     belongs in validated typed configuration, resource declarations, registries,
+     strategy contracts, or server-provided metadata with explicit defaults and
+     compatibility rules. Stable product invariants, including the fixed seven-
+     stage pipeline, security boundaries, protocol semantics, and closed enums,
+     MAY remain enforced in code. Extensibility does not justify an arbitrary
+     plugin runtime, premature framework, or bypass of validation, governance,
+     accounting, and audit boundaries.
+
+  2. Localization by default. The Web Console MUST support at least Simplified
+     Chinese (`zh-CN`) and English (`en-US`). Every user-visible label, message,
+     validation error, empty state, confirmation, accessibility description, and
+     notification MUST be addressed by a stable localization key; components
+     MUST NOT contain hard-coded user-visible Chinese or English text. Locale
+     resources MUST use centrally managed JSON files under
+     `web/console/src/locales/<locale>/`, maintain key parity, use `en-US` as the
+     deterministic fallback, and support locale-aware date, time, number,
+     currency, plural, and interpolation formatting. Backend APIs return stable
+     error codes and structured parameters rather than pre-localized UI prose.
+
+  3. Secret-minimizing Console interaction. Secrets and sensitive credentials
+     MUST be created, encrypted, stored, resolved, and rotated on the server side
+     through a Secret Provider abstraction; production configuration and browser
+     state use opaque `secret_ref` values. A plaintext secret may cross the
+     browser-to-server boundary only when the workflow inherently requires entry
+     or one-time creation display, MUST use TLS, MUST be retained for the shortest
+     possible lifetime, and MUST NOT be returned by later APIs. Secrets MUST NOT
+     enter URLs, localStorage, sessionStorage, persisted state, query caches,
+     service-worker caches, logs, traces, analytics, error reports, clipboard
+     history beyond an explicit user action, semantic diffs, or audit payloads.
+     Console authentication uses Secure/HttpOnly/SameSite cookies; authorization
+     and redaction are enforced by the backend. Provider tests and operational
+     actions SHOULD execute server-side from `secret_ref` to avoid retransmitting
+     credentials. Encryption at rest, key separation, rotation, least privilege,
+     CSP, output escaping, CSRF protection, re-authentication for high-risk
+     actions, and automated secret-leak regression tests are required controls.
+
+rules:
+  proposal:
+    - Name changes around an end-to-end user outcome, not an internal module.
+    - Include explicit non-goals and map the change to at least one Golden Scenario.
+    - Identify impacts on extensibility, localization, and secret-bearing Console workflows.
+  specs:
+    - Cover functional behavior, failure modes, tenant isolation, accounting, security, explainability, observability, performance, UX, and Golden Scenario mapping where applicable.
+    - Use normative SHALL or MUST language and testable WHEN/THEN scenarios.
+    - Preserve the fixed seven-stage pipeline and frozen module ownership boundaries.
+    - Specify which behavior is a fixed invariant and which behavior is configurable or registry-driven; do not use vague requirements such as "do not hard-code anything".
+    - Require zh-CN and en-US JSON key parity, deterministic fallback, locale-aware formatting, and no hard-coded user-visible component strings for Console changes.
+    - Include negative scenarios proving secrets do not appear in API reads, URLs, browser persistence/cache, logs, telemetry, diffs, audit payloads, or cross-tenant responses when a workflow handles sensitive data.
+  design:
+    - Record alternatives and rationale for material architectural decisions.
+    - Identify phase assumptions separately from frozen V7.2 decisions.
+    - Separate stable invariants from extension points and document configuration validation, defaults, compatibility, and failure behavior.
+    - Document locale resource ownership and the sensitive-data lifecycle, trust boundaries, encryption, redaction, transport minimization, and rotation strategy where applicable.
+  tasks:
+    - Order tasks by dependency and include tests and observability with each vertical slice.
+    - Do not defer tenant-isolation or failure-path verification to a final hardening task.
+    - Include configuration/extension contract tests, locale parity and hard-coded-string checks, and secret-leak regression tests in the same task that introduces the behavior.

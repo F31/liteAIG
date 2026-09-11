@@ -1,0 +1,242 @@
+[
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "const",
+    "name": "DefaultAPIVersion"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "func",
+    "name": "New"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "func",
+    "name": "WithAPIVersion"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "func",
+    "name": "WithHTTPClient"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "Close",
+    "method": "A2AStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "Recv",
+    "method": "A2AStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "Close",
+    "method": "ChatCompletionStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "Recv",
+    "method": "ChatCompletionStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CallA2A",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CallMCP",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CallMCPTool",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CreateChatCompletion",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CreateChatCompletionStream",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CreateEmbedding",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "CreateResponse",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "ListModels",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "SendA2AMessage",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "SendA2AMessageStream",
+    "method": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "method",
+    "name": "OutputText",
+    "method": "ResponsesResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2AMessage"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2APart"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2ARequest"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2AResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2ASendMessageParams"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2AStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "A2AStreamEvent"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ChatCompletionRequest"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ChatCompletionResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ChatCompletionStream"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ChatCompletionStreamEvent"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "Client"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "EmbeddingRequest"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "EmbeddingResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "MCPError"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "MCPRequest"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "MCPResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "MCPToolCallParams"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "Message"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ModelList"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "Option"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ResponsesRequest"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ResponsesResponse"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ResponsesUsage"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "ToolCallDelta"
+  },
+  {
+    "package": "github.com/F31/liteAIG/pkg/liteaig",
+    "kind": "type",
+    "name": "Usage"
+  }
+]

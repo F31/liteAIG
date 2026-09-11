@@ -1,0 +1,9 @@
+{{- if .Values.priorityClass.create }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ default (include "liteaig.fullname" .) .Values.priorityClass.name }}
+value: {{ .Values.priorityClass.value }}
+globalDefault: false
+description: LiteAIG HA workloads priority class
+{{- end }}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "required": ["key", "maxSkew", "whenUnsatisfiable"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "maxSkew": { "type": "integer", "minimum": 1 },
+        "whenUnsatisfiable": { "type": "string", "enum": ["ScheduleAnyway", "DoNotSchedule"] }
+      }
+    },
+    "drain": {
+      "type": "object",
+      "required": ["drainTimeoutSeconds", "streamDrainTimeoutSeconds", "forceShutdownTimeoutSeconds", "terminationGracePeriodSeconds"],
+      "properties": {
+        "drainTimeoutSeconds": { "type": "integer", "minimum": 1 },
+        "streamDrainTimeoutSeconds": { "type": "integer", "minimum": 1 },
+        "forceShutdownTimeoutSeconds": { "type": "integer", "minimum": 1 },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "database": {
+      "type": "object",
+      "required": ["existingClaim", "storageClass", "size"],
+      "properties": {
+        "existingClaim": { "type": "string" },
+        "storageClass": { "type": "string" },
+        "size": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workloads": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/workload" }
+    }
+  },
+  "$defs": {
+    "workload": {
+      "type": "object",
+      "required": ["enabled", "mode", "replicas", "pdb", "rollingUpdate", "service", "resources", "autoscaling"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["all", "gateway", "control"] },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "database": {
+          "type": "object",
+          "required": ["enabled", "dir"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "dir": { "type": "string", "minLength": 1 }
+          }
+        },
+        "pdb": {
+          "type": "object",
+          "required": ["minAvailable"],
+          "properties": { "minAvailable": { "type": "integer", "minimum": 0 } }
+        },
+        "rollingUpdate": {
+          "type": "object",
+          "required": ["maxUnavailable", "maxSurge"],
+          "properties": {
+            "maxUnavailable": { "type": "integer", "minimum": 0 },
+            "maxSurge": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "service": {
+          "type": "object",
+          "required": ["type", "port"],
+          "properties": {
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "resources": { "type": "object" },
+        "extraArgs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "extraEnv": { "type": "array", "items": { "type": "object" } },
+        "autoscaling": {
+          "type": "object",
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1 },
+            "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0 },
+            "customMetrics": { "type": "array", "items": { "type": "object" } }
+          }
+        }
+      }
+    }
+  }
+}

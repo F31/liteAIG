@@ -1,0 +1,20 @@
+{{- range $name, $workload := .Values.workloads }}
+{{- if $workload.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "liteaig.workloadName" (dict "root" $ "name" $name) }}
+  labels:
+    {{- include "liteaig.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: {{ $workload.service.type }}
+  selector:
+    {{- include "liteaig.selectorLabels" (dict "root" $ "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $workload.service.port }}
+      targetPort: http
+---
+{{- end }}
+{{- end }}

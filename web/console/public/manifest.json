@@ -1,0 +1,8 @@
+{
+  "name": "LiteAIG Console",
+  "short_name": "LiteAIG",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#edf1f4",
+  "theme_color": "#176b67"
+}
