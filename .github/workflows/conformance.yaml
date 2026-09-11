@@ -23,6 +23,14 @@ jobs:
           go-version: "1.25.x"
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Build Console dist
+        run: bash scripts/build-console.sh
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

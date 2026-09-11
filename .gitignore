@@ -11,6 +11,8 @@ coverage/
 .env
 .env.*
 data/
+__pycache__/
+*.pyc
 web/console/node_modules/
 web/console/dist/
 web/console/e2e/.bin/

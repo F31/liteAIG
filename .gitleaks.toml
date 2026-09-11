@@ -4,10 +4,17 @@ title = "LiteAIG gitleaks config"
 useDefault = true
 
 [allowlist]
-description = "Build artifacts and vendored dependencies"
+description = "Build artifacts, vendored dependencies, and known false positives"
 paths = [
   '''web/console/dist/.*''',
   '''web/console/node_modules/.*''',
   '''tests/contract/sdk/node_modules/.*''',
   '''graphify-out/.*''',
+]
+regexes = [
+  # "a2a.delegation.hops" matches the generic-api-key heuristic but is a scope
+  # constant, not a credential.
+  '''a2a\.delegation\.hops''',
+  # Test fixtures use obviously-fake credentials on purpose.
+  '''s3cr3t-api-key''',
 ]

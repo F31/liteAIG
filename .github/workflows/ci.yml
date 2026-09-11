@@ -39,10 +39,10 @@ jobs:
         run: npm test
         working-directory: tests/contract/sdk
       - name: Start Console preview
-        run: npm run preview -- --host 127.0.0.1 &
+        run: npm run preview -- --host 127.0.0.1 --port 8090 &
         working-directory: web/console
       - name: Wait for Console preview
-        run: for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4173/dashboard >/dev/null && exit 0; sleep 1; done; exit 1
+        run: for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8090/dashboard >/dev/null && exit 0; sleep 1; done; exit 1
       - name: Lighthouse accessibility gate
         uses: treosh/lighthouse-ci-action@v12
         with:
@@ -86,6 +86,14 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Build Console dist
+        run: bash scripts/build-console.sh
 
       - name: Verify formatting
         run: test -z "$(gofmt -l .)"
@@ -225,6 +233,14 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Build Console dist
+        run: bash scripts/build-console.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
