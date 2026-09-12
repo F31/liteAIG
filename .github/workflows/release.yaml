@@ -86,6 +86,10 @@ jobs:
         with:
           image: ${{ steps.sbom-image.outputs.ref }}
           artifact-name: sbom.spdx.json
+          # Place the SBOM in the workspace so the release step can reference it
+          # by relative path; anchore defaults to a temp dir outside the checkout.
+          output-file: sbom.spdx.json
+          upload-artifact: false
 
       - name: Upload SBOM (dry-run artifact)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
