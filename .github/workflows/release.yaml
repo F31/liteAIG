@@ -56,23 +56,35 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # Dry-run builds into the local daemon (no GHCR push) so the SBOM
-          # step can scan the artifact; real tag releases push to GHCR.
           push: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-          load: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          # Dry-run exports a local docker-archive instead of pushing to GHCR so
+          # the SBOM step can scan the artifact without a registry dependency.
+          outputs: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'type=docker,dest=/tmp/liteaig-image.tar' || 'type=registry' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Compute SBOM image reference
+        id: sbom-image
+        run: |
+          # syft/go-containerregistry reject mixed-case registry references, so
+          # always scan the lower-cased image; dry-run scans the local archive.
+          LOW="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          if [ -n "$DRY" ]; then
+            echo "ref=docker-archive:/tmp/liteaig-image.tar" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=ghcr.io/${LOW}:${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
 
       - name: Generate SBOM for the built image
         uses: anchore/sbom-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Dry-run scans the locally loaded image (nothing was pushed to GHCR);
-          # real tag releases scan the published registry image.
-          image: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && format('docker:ghcr.io/{0}:{1}', github.repository, github.ref_name) || format('ghcr.io/{0}:{1}', github.repository, github.ref_name) }}
+          image: ${{ steps.sbom-image.outputs.ref }}
           artifact-name: sbom.spdx.json
 
       - name: Upload SBOM (dry-run artifact)
