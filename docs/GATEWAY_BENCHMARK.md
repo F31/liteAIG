@@ -32,3 +32,18 @@ SQLite LiteAIG + loopback mock OpenAI provider, 5s duration, concurrency 8, limi
 | stream | 1720.6 | 8.1 ms | 8.1 ms | 0% |
 
 Treat these as a local smoke baseline, not a Standard/Enterprise capacity claim. Capture topology, provider behavior, limiter settings, duration, concurrency, and report artifact with every release benchmark.
+
+## Standard-Tier Reference (real topology)
+
+Standard topology: two `mode=all` replicas sharing **Postgres + Redis coordination** (`--coordinator=redis://...`), `--gateway-rpm=60000 --gateway-burst=60000`, loopback mock provider, 20s windows, concurrency 8 per replica. Load split by hitting each replica's gateway directly. Measured on `beececd5` (Linux/amd64, containerized Postgres 17 / Redis 7 on localhost):
+
+| Mode | Topology | RPS (per replica) | Combined RPS | P99 | TTFT P99 | Error Rate |
+|---|---|---:|---:|---:|---:|---:|
+| chat | single replica | 669 / 631 | — | 16.5 ms | n/a | 0% |
+| chat | two replicas (split) | 609 / 612 | **1221** | 25.2 ms | n/a | 0% |
+| stream | single replica | 482 | — | 22.2 ms | 22.0 ms | 0% |
+| stream | two replicas (split) | 501 / 648 | **1149** | 25.4 ms | 24.9 ms | 0% |
+
+Pod-replacement resilience: killing one replica left the surviving replica serving uninterrupted on the shared configuration/key (all state lives in Postgres + Redis); no data-plane interruption was observed.
+
+Standard-tier throughput is lower than the SQLite local smoke because every request persists accounting to Postgres and coordinates via Redis; the Standard numbers above are the production-representative baseline for capacity planning.
