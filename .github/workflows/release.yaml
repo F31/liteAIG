@@ -56,7 +56,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # Dry-run builds into the local daemon (no GHCR push) so the SBOM
+          # step can scan the artifact; real tag releases push to GHCR.
           push: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+          load: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -67,7 +70,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          # Dry-run scans the locally loaded image (nothing was pushed to GHCR);
+          # real tag releases scan the published registry image.
+          image: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && format('docker:ghcr.io/{0}:{1}', github.repository, github.ref_name) || format('ghcr.io/{0}:{1}', github.repository, github.ref_name) }}
           artifact-name: sbom.spdx.json
 
       - name: Upload SBOM (dry-run artifact)
