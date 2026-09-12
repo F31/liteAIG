@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/F31/liteAIG/internal/access/auth"
@@ -830,6 +831,14 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 			return string(plain), err
 		},
 	})
+	var background sync.WaitGroup
+	runBackground := func(run func()) {
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			run()
+		}()
+	}
 	pushCtx, pushCancel := context.WithCancel(context.Background())
 	defer func() {
 		if !composed {
@@ -837,9 +846,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 		}
 	}()
 	pushWorker := &singletonTask{leases: foundation.store.Coordination, scope: platformA2APushScope, ttl: singletonLeaseTTL}
-	go pushWorker.run(pushCtx, time.Second, func(ctx context.Context) error {
-		gatewayServer.DrainA2APushOutbox(ctx)
-		return nil
+	runBackground(func() {
+		pushWorker.run(pushCtx, time.Second, func(ctx context.Context) error {
+			gatewayServer.DrainA2APushOutbox(ctx)
+			return nil
+		})
 	})
 	eventOutboxCtx, eventOutboxCancel := context.WithCancel(context.Background())
 	defer func() {
@@ -849,8 +860,10 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	}()
 	eventOutboxWorker := newOutboxDeliveryWorker(foundation.store.EventOutbox, notificationSink, foundation.clock)
 	eventOutbox := &singletonTask{leases: foundation.store.Coordination, scope: platformEventOutboxScope, ttl: singletonLeaseTTL}
-	go eventOutbox.run(eventOutboxCtx, time.Second, func(ctx context.Context) error {
-		return eventOutboxWorker.Drain(ctx)
+	runBackground(func() {
+		eventOutbox.run(eventOutboxCtx, time.Second, func(ctx context.Context) error {
+			return eventOutboxWorker.Drain(ctx)
+		})
 	})
 	gatewayHandler := gatewayServer.Handler()
 	if tracer != nil {
@@ -1008,7 +1021,7 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 		syncer := newBundleSyncer(client, publicKey, registry, foundation.clock, 15*time.Second)
 		syncCtx, cancel := context.WithCancel(context.Background())
 		syncCancel = cancel
-		go syncer.run(syncCtx)
+		runBackground(func() { syncer.run(syncCtx) })
 	}
 	// Config converge loop: every replica that shares the same database
 	// re-applies the latest published version of every tenant. A publish only
@@ -1019,7 +1032,7 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	var reconcileCancel context.CancelFunc
 	reconcileCtx, cancelReconcile := context.WithCancel(context.Background())
 	reconcileCancel = cancelReconcile
-	go func() {
+	runBackground(func() {
 		ticker := time.NewTicker(configReconcileInterval)
 		defer ticker.Stop()
 		for {
@@ -1032,7 +1045,7 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 				}
 			}
 		}
-	}()
+	})
 
 	// Reservation Sweeper (§14.3): the platform leader expires abandoned budget
 	// reservations every reservationSweepInterval. Leadership comes from the
@@ -1042,9 +1055,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	sweeper := &singletonTask{leases: foundation.store.Coordination, scope: platformSweeperScope, ttl: singletonLeaseTTL}
 	sweepCtx, cancel := context.WithCancel(context.Background())
 	sweeperCancel = cancel
-	go sweeper.run(sweepCtx, reservationSweepInterval, func(ctx context.Context) error {
-		pipeline.budget.Sweep()
-		return nil
+	runBackground(func() {
+		sweeper.run(sweepCtx, reservationSweepInterval, func(ctx context.Context) error {
+			pipeline.budget.Sweep()
+			return nil
+		})
 	})
 	// Audit retention sweeper: every replica sharing the database purges
 	// expired audit events for tenants with an explicit retention policy.
@@ -1053,7 +1068,7 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	var retentionCancel context.CancelFunc
 	retentionCtx, cancelRetention := context.WithCancel(context.Background())
 	retentionCancel = cancelRetention
-	go func() {
+	runBackground(func() {
 		ticker := time.NewTicker(auditRetentionInterval)
 		defer ticker.Stop()
 		for {
@@ -1071,14 +1086,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 				}
 			}
 		}
-	}()
+	})
 	closeFunc := func() error {
-		_ = tracer.Shutdown(context.Background())
-		_ = otlpMetrics.Shutdown(context.Background())
-		_ = otlpLogger.Shutdown(context.Background())
-		closeNotifications()
 		var firstErr error
 		pushCancel()
+		eventOutboxCancel()
 		if reconcileCancel != nil {
 			reconcileCancel()
 		}
@@ -1091,6 +1103,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 		if sweeperCancel != nil {
 			sweeperCancel()
 		}
+		background.Wait()
+		closeNotifications()
+		_ = tracer.Shutdown(context.Background())
+		_ = otlpMetrics.Shutdown(context.Background())
+		_ = otlpLogger.Shutdown(context.Background())
 		if flushAnalytics != nil {
 			drainCtx, cancelDrain := context.WithTimeout(context.Background(), spoolDrainTimeout)
 			if err := flushAnalytics(drainCtx); err != nil && firstErr == nil {
