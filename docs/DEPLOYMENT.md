@@ -51,7 +51,9 @@ Notes that apply to both:
   `internal/observability/alert/defaults_test.go` keeps it schema-valid. Import
   it through the Console Alerts page or `POST /api/admin/alerts/rules/import-defaults`.
 - `docs/RELEASE.md` is the release operator checklist; `docs/UPGRADE_DRILL.md`
-  is the migration and rollback rehearsal runbook.
+  is the migration and rollback rehearsal runbook; `docs/PRODUCTION_TRIAL.md`
+  is the go/no-go gate, golden-signal threshold, and RPO/RTO checklist used
+  during a single-tenant production trial.
 - `docs/WHITEPAPER.md` is the product/architecture technical whitepaper;
   `docs/GAP_ANALYSIS.md` is the enterprise feature gap ledger and
   `docs/ROADMAP_V86_COMPLIANCE.md` records each batch's completion status.
