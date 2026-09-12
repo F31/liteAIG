@@ -172,6 +172,31 @@ func TestLiteMetricsEndpointExposesAuditRetentionPurge(t *testing.T) {
 	auditRetentionPurge.lastAt.Store(0)
 }
 
+func TestLiteMetricsEndpointExposesFileMappingRetentionPurge(t *testing.T) {
+	db, err := sqlite.Open(context.Background(), "file:metrics-file-retention-"+strings.ReplaceAll(t.Name(), "/", "-")+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := migrations.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	store := sqlrepo.Open(db, sqlrepo.Deps{})
+	recordFileMappingPurge(4, time.Unix(1700000100, 0))
+	rec := scrapeMetrics(t, store)
+	body := rec.Body.String()
+	for _, sample := range []string{
+		"liteaig_file_mappings_purged_total 4\n",
+		"liteaig_file_mapping_purge_last_timestamp_seconds 1700000100\n",
+	} {
+		if count := strings.Count(body, sample); count != 1 {
+			t.Errorf("sample %q occurred %d times in:\n%s", sample, count, body)
+		}
+	}
+	fileMappingRetentionPurge.total.Store(0)
+	fileMappingRetentionPurge.lastAt.Store(0)
+}
+
 func TestLiteMetricsEndpointGracefulScrapeError(t *testing.T) {
 	db, err := sqlite.Open(context.Background(), "file:metrics-err-"+strings.ReplaceAll(t.Name(), "/", "-")+"?mode=memory&cache=shared")
 	if err != nil {

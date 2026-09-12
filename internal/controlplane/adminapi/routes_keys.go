@@ -35,6 +35,9 @@ func (s *Server) revealKey(c *webkit.Context) error {
 }
 
 func (s *Server) revokeKey(c *webkit.Context) error {
+	if err := s.requireReauth(c); err != nil {
+		return err
+	}
 	if err := s.keySvc.RevokeKey(c.Request().Context(), scopeOf(c), c.Param("id"), sessionFrom(c).AdminID); err != nil {
 		return err
 	}

@@ -50,6 +50,7 @@ type MeResponse = {
   username?: string;
   role?: string;
   scopes?: string[];
+  authMethod?: string;
   csrfToken?: string;
   email?: string;
 };
@@ -220,6 +221,7 @@ export function App() {
         username: data.username ?? "",
         role: data.role ?? "",
         scopes: data.scopes ?? [],
+        authMethod: data.authMethod ?? "local",
       });
       return data;
     },

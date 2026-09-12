@@ -22,11 +22,21 @@ var auditRetentionPurge = struct {
 	lastAt atomic.Int64 // unix seconds; 0 until the first sweep completes
 }{}
 
+var fileMappingRetentionPurge = struct {
+	total  atomic.Int64
+	lastAt atomic.Int64
+}{}
+
 // recordAuditPurge records one retention sweep outcome. removed may be zero;
 // lastAt is the sweep time used for the freshness gauge.
 func recordAuditPurge(removed int64, at time.Time) {
 	auditRetentionPurge.total.Add(removed)
 	auditRetentionPurge.lastAt.Store(at.Unix())
+}
+
+func recordFileMappingPurge(removed int64, at time.Time) {
+	fileMappingRetentionPurge.total.Add(removed)
+	fileMappingRetentionPurge.lastAt.Store(at.Unix())
 }
 
 // liteMetrics serves a dependency-free Prometheus text exposition on the Lite
@@ -67,6 +77,7 @@ func liteMetrics(store *sqlrepo.Store) webkit.Handler {
 		writeA2APushOutboxMetrics(ctx, write, store)
 		writeEventOutboxMetrics(ctx, write, store)
 		writeAuditRetentionMetrics(write)
+		writeFileMappingRetentionMetrics(write)
 
 		c.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		c.Header().Set("Cache-Control", "no-store")
@@ -131,6 +142,17 @@ func writeAuditRetentionMetrics(write func(string, ...any)) {
 		write("# HELP liteaig_audit_purge_last_timestamp_seconds Last audit retention sweep completion (unix seconds).\n")
 		write("# TYPE liteaig_audit_purge_last_timestamp_seconds gauge\n")
 		write("liteaig_audit_purge_last_timestamp_seconds %d\n", last)
+	}
+}
+
+func writeFileMappingRetentionMetrics(write func(string, ...any)) {
+	write("# HELP liteaig_file_mappings_purged_total Cumulative local file mappings removed by retention sweeps.\n")
+	write("# TYPE liteaig_file_mappings_purged_total counter\n")
+	write("liteaig_file_mappings_purged_total %d\n", fileMappingRetentionPurge.total.Load())
+	if last := fileMappingRetentionPurge.lastAt.Load(); last > 0 {
+		write("# HELP liteaig_file_mapping_purge_last_timestamp_seconds Last file mapping retention sweep completion (unix seconds).\n")
+		write("# TYPE liteaig_file_mapping_purge_last_timestamp_seconds gauge\n")
+		write("liteaig_file_mapping_purge_last_timestamp_seconds %d\n", last)
 	}
 }
 

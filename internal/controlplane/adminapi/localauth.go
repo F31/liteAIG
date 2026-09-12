@@ -42,10 +42,11 @@ func (v LocalVerifier) Verify(ctx context.Context, username string, password []b
 		return Session{}, errors.New("invalid credentials")
 	}
 	return Session{
-		AdminID:  credential.AdminID,
-		TenantID: credential.TenantID,
-		Username: credential.Username,
-		Role:     credential.RoleOrDefault(),
+		AdminID:    credential.AdminID,
+		TenantID:   credential.TenantID,
+		Username:   credential.Username,
+		Role:       credential.RoleOrDefault(),
+		AuthMethod: "local",
 	}, nil
 }
 

@@ -78,10 +78,8 @@ func (s *Service) SetSystemConfig(ctx context.Context, document SystemConfig, ac
 	if s.system == nil {
 		return SystemConfig{}, fmt.Errorf("system config repository not wired")
 	}
-	switch document.TenantDefaults.ResidencyEnforcement {
-	case "", "advisory", "strict":
-	default:
-		return SystemConfig{}, fmt.Errorf("invalid residency_enforcement %q: want advisory or strict", document.TenantDefaults.ResidencyEnforcement)
+	if err := ValidateSystemConfig(document); err != nil {
+		return SystemConfig{}, err
 	}
 	if _, err := s.system.SetSystemConfig(ctx, document, actorID); err != nil {
 		return SystemConfig{}, err
@@ -89,6 +87,20 @@ func (s *Service) SetSystemConfig(ctx context.Context, document SystemConfig, ac
 	s.emitSystemConfigUpdate(ctx, actorID)
 	_, _ = s.ReconcileAll(ctx)
 	return document, nil
+}
+
+// ValidateSystemConfig validates global policy values before persistence or
+// destructive background use.
+func ValidateSystemConfig(document SystemConfig) error {
+	if document.FileMappingRetentionDays < 0 || document.FileMappingRetentionDays > MaxFileMappingRetentionDays {
+		return fmt.Errorf("file_mapping_retention_days must be between 0 and %d", MaxFileMappingRetentionDays)
+	}
+	switch document.TenantDefaults.ResidencyEnforcement {
+	case "", "advisory", "strict":
+	default:
+		return fmt.Errorf("invalid residency_enforcement %q: want advisory or strict", document.TenantDefaults.ResidencyEnforcement)
+	}
+	return nil
 }
 
 func (s *Service) emitSystemConfigUpdate(ctx context.Context, actorID string) {

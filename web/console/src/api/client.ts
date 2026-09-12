@@ -64,12 +64,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     .json()
     .catch(() => ({ error: { code: "INTERNAL_ERROR" } }));
   if (!response.ok) {
-    if (response.status === 401 && !AUTH_EXEMPT(path) && !unauthorizedHandled) {
+    const error = body as APIErrorBody;
+    if (
+      response.status === 401 &&
+      error.error?.code !== "REAUTH_REQUIRED" &&
+      !AUTH_EXEMPT(path) &&
+      !unauthorizedHandled
+    ) {
       unauthorizedHandled = true;
       clearCSRFToken();
       window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
-    const error = body as APIErrorBody;
     throw new APIError(
       error.error?.code ?? "INTERNAL_ERROR",
       error.error?.params,
@@ -117,12 +122,24 @@ export type FinOpsView = {
   semanticHits: number;
   cacheHitRate: number;
   semanticHitRate: number;
+  savedTokens: number;
+  pricedSavedTokens: number;
+  unpricedSavedTokens: number;
+  cacheSavings: number;
+  estimateVersion: string;
   byProject: {
     projectId: string;
     requests: number;
     inputTokens: number;
     outputTokens: number;
     spend: number;
+    cacheHits: number;
+    semanticHits: number;
+    cacheHitRate: number;
+    savedTokens: number;
+    pricedSavedTokens: number;
+    unpricedSavedTokens: number;
+    cacheSavings: number;
   }[];
   byModel: {
     logicalModel: string;
@@ -132,6 +149,13 @@ export type FinOpsView = {
     spend: number;
     retryCount: number;
     fallbackCount: number;
+    cacheHits: number;
+    semanticHits: number;
+    cacheHitRate: number;
+    savedTokens: number;
+    pricedSavedTokens: number;
+    unpricedSavedTokens: number;
+    cacheSavings: number;
   }[];
   recommendations: {
     kind: string;

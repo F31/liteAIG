@@ -3,10 +3,12 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/F31/liteAIG/internal/finops/accounting"
+	"github.com/F31/liteAIG/internal/finops/pricing"
 	"github.com/F31/liteAIG/internal/kernel/runtime"
 	"github.com/F31/liteAIG/internal/observability/alert"
 	"github.com/F31/liteAIG/internal/tenancy"
@@ -82,10 +84,17 @@ func TestRuntimeResourcesExposeBudgetConsistency(t *testing.T) {
 func TestControlBackendFinOpsAggregatesRecentRequests(t *testing.T) {
 	costA := 0.30
 	costB := 0.10
+	registry := &runtime.ActiveRegistry{}
+	registry.ActivateTenant("tenant-ref", runtime.NewTenantSnapshot(runtime.TenantSnapshotData{
+		TenantID: "tenant", TenantRef: "tenant-ref", Status: "active", Version: 1,
+		Deployments:   []runtime.Deployment{{ID: "deployment", Status: "enabled", UpstreamModel: "gpt-4o-mini"}},
+		RoutePolicies: []runtime.RoutePolicy{{ID: "route", DeploymentIDs: []string{"deployment"}}},
+		LogicalModels: []runtime.LogicalModel{{ID: "logical", Alias: "chat", RoutePolicyID: "route"}},
+	}))
 	backend := NewControlBackend(nil, finopsAccounting{requests: []accounting.RequestRecord{
-		{ProjectID: "project-b", LogicalModel: "chat", InputTokens: 10, OutputTokens: 5, ProviderCost: &costB, Source: "semantic_cache"},
+		{ProjectID: "project-b", LogicalModel: "chat", InputTokens: 10, OutputTokens: 5, ProviderCost: &costB, Source: "semantic_cache", SnapshotVersion: 1},
 		{ProjectID: "project-a", LogicalModel: "chat", InputTokens: 20, OutputTokens: 10, RetryCount: 1, FallbackCount: 1, ProviderCost: &costA, Source: "gateway"},
-	}}, nil, nil, nil, nil, nil, nil, nil, nil)
+	}}, nil, nil, nil, registry, nil, nil, nil, nil)
 
 	view, err := backend.FinOps(context.Background(), tenancy.TenantScope{TenantID: "tenant"})
 	if err != nil {
@@ -94,17 +103,45 @@ func TestControlBackendFinOpsAggregatesRecentRequests(t *testing.T) {
 	if view.Requests != 2 || view.Spend < 0.39 || view.SemanticHits != 1 || view.CacheHitRate != 0.5 || view.SemanticHitRate != 0.5 {
 		t.Fatalf("view = %+v", view)
 	}
-	if view.SavedTokens != 15 || view.CacheSavings != 15.0/1_000_000*cacheChargePerMillion {
+	wantSavings, _ := pricing.Price(pricing.LiteReferencePriceVersion, "gpt-4o-mini", "USD", 10, 5)
+	if view.SavedTokens != 15 || view.PricedSavedTokens != 15 || view.UnpricedSavedTokens != 0 || view.CacheSavings != wantSavings || view.EstimateVersion != pricing.LiteReferencePriceVersion.ID {
 		t.Fatalf("cache savings = saved %d estimated %.6f", view.SavedTokens, view.CacheSavings)
 	}
 	if len(view.ByProject) != 2 || view.ByProject[0].ProjectID != "project-a" {
 		t.Fatalf("projects = %+v", view.ByProject)
 	}
-	if len(view.ByModel) != 1 || view.ByModel[0].SavedTokens != 15 {
+	if len(view.ByModel) != 1 || view.ByModel[0].SavedTokens != 15 || view.ByModel[0].CacheSavings != wantSavings || view.ByModel[0].CacheHitRate != 0.5 {
 		t.Fatalf("models = %+v", view.ByModel)
 	}
 	if view.RetryCost == 0 || view.FallbackCost == 0 || len(view.Recommendations) == 0 {
 		t.Fatalf("optimization = retry %.4f fallback %.4f recommendations %+v", view.RetryCost, view.FallbackCost, view.Recommendations)
+	}
+}
+
+func TestControlBackendFinOpsLeavesAmbiguousCacheSavingsUnpriced(t *testing.T) {
+	registry := &runtime.ActiveRegistry{}
+	registry.ActivateTenant("tenant-ref", runtime.NewTenantSnapshot(runtime.TenantSnapshotData{
+		TenantID: "tenant", TenantRef: "tenant-ref", Status: "active", Version: 2,
+		Deployments: []runtime.Deployment{
+			{ID: "cheap", Status: "enabled", UpstreamModel: "gpt-4o-mini"},
+			{ID: "premium", Status: "enabled", UpstreamModel: "gpt-4o"},
+		},
+		RoutePolicies: []runtime.RoutePolicy{{ID: "route", DeploymentIDs: []string{"cheap", "premium"}}},
+		LogicalModels: []runtime.LogicalModel{{ID: "logical", Alias: "chat", RoutePolicyID: "route"}},
+	}))
+	backend := NewControlBackend(nil, finopsAccounting{requests: []accounting.RequestRecord{{
+		ProjectID: "project", LogicalModel: "chat", InputTokens: 100, OutputTokens: 20, Source: "cache", SnapshotVersion: 2,
+	}}}, nil, nil, nil, registry, nil, nil, nil, nil)
+
+	view, err := backend.FinOps(context.Background(), tenancy.TenantScope{TenantID: "tenant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.SavedTokens != 120 || view.PricedSavedTokens != 0 || view.UnpricedSavedTokens != 120 || view.CacheSavings != 0 {
+		t.Fatalf("view=%+v", view)
+	}
+	if len(view.Recommendations) == 0 || !strings.Contains(view.Recommendations[0].Detail, "120 unpriced") {
+		t.Fatalf("recommendations=%+v", view.Recommendations)
 	}
 }
 

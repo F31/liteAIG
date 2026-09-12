@@ -534,6 +534,8 @@ func buildLiteAdmin(controlBackend *backend.ControlBackend, f *liteFoundation, o
 		// Brute-force protection: 5 failed logins per account and 20 total
 		// attempts per client per 15 minutes.
 		LoginLimiter:     adminapi.NewLoginLimiter(15*time.Minute, 5, 20),
+		EventSink:        events,
+		EventIDs:         f.ids,
 		PasswordReset:    passwordReset,
 		ResetRateLimiter: adminapi.NewResetRateLimiter(15*time.Minute, 10, 5, time.Minute),
 		Audit:            auditLocalAuth,
@@ -1082,6 +1084,16 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 					recordAuditPurge(removed, time.Now())
 					if removed > 0 {
 						log.Printf("lite: audit retention purged %d expired event(s)", removed)
+					}
+				}
+				now := time.Now()
+				removed, enabled, mappingErr := sweepFileMappingRetention(retentionCtx, configService, foundation.store.BatchMappings, now)
+				if mappingErr != nil {
+					log.Printf("lite: file mapping retention purge: %v", mappingErr)
+				} else if enabled {
+					recordFileMappingPurge(removed, now)
+					if removed > 0 {
+						log.Printf("lite: file mapping retention purged %d expired mapping(s)", removed)
 					}
 				}
 			}

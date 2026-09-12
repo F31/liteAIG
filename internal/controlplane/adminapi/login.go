@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/F31/liteAIG/internal/controlplane/rbac"
+	"github.com/F31/liteAIG/internal/kernel/contracts"
 	"github.com/F31/liteAIG/internal/platform/webkit"
 )
 
@@ -28,6 +29,10 @@ type SessionEndpoints struct {
 	Audit func(ctx context.Context, actor, action, resourceID string) error
 	// LoginLimiter bounds credential attempts; nil disables throttling.
 	LoginLimiter *LoginLimiter
+	// EventSink receives redacted authentication security events. EventIDs is
+	// required when EventSink is configured; emission is best-effort.
+	EventSink contracts.EventSink
+	EventIDs  UserIDGenerator
 	// PasswordReset serves the email-verified forgot-password flow; nil or
 	// disabled keeps the login screen on the local emergency reset only.
 	PasswordReset PasswordResetService
@@ -193,7 +198,11 @@ func (e SessionEndpoints) login(c *webkit.Context) error {
 	rateLimited := func() error {
 		return webkit.NewAPIError(http.StatusTooManyRequests, "RATE_LIMITED", map[string]any{"retryAfterSeconds": int(e.LoginLimiter.Window().Seconds())})
 	}
-	if e.LoginLimiter != nil && !e.LoginLimiter.IPAllowed(ip, time.Now()) {
+	now := time.Now()
+	if e.LoginLimiter != nil && !e.LoginLimiter.IPAllowed(ip, now) {
+		if e.LoginLimiter.ReportBlock("ip:"+ip, now) {
+			e.emitSecurityEvent(c, "admin.security.rate_limited", "login_ip_attempt_limit")
+		}
 		return rateLimited()
 	}
 	password := []byte(input.Password)
@@ -201,12 +210,20 @@ func (e SessionEndpoints) login(c *webkit.Context) error {
 	defer clear(password)
 	session, err := e.Verifier.Verify(c.Request().Context(), input.Username, password)
 	if err != nil {
+		blocked := e.LoginLimiter != nil && e.LoginLimiter.AccountBlocked(ip, input.Username, time.Now())
+		if blocked {
+			if e.LoginLimiter.ReportBlock("account:"+ip+"|"+input.Username, time.Now()) {
+				e.emitSecurityEvent(c, "admin.security.rate_limited", "login_account_failure_limit")
+			}
+		} else {
+			e.emitSecurityEvent(c, "admin.security.login_failed", "invalid_credentials")
+		}
 		if e.Audit != nil {
 			if auditErr := e.Audit(c.Request().Context(), "anonymous", "auth.login_failed", input.Username); auditErr != nil {
 				return internalError()
 			}
 		}
-		if e.LoginLimiter != nil && e.LoginLimiter.AccountBlocked(ip, input.Username, time.Now()) {
+		if blocked {
 			return rateLimited()
 		}
 		return webkit.NewAPIError(http.StatusUnauthorized, "UNAUTHORIZED", nil)
@@ -221,6 +238,19 @@ func (e SessionEndpoints) login(c *webkit.Context) error {
 		return internalError()
 	}
 	return c.JSON(http.StatusOK, map[string]string{"csrfToken": csrf})
+}
+
+func (e SessionEndpoints) emitSecurityEvent(c *webkit.Context, kind, reason string) {
+	if e.EventSink == nil || e.EventIDs == nil {
+		return
+	}
+	id, err := e.EventIDs.New()
+	if err != nil || id == "" {
+		return
+	}
+	_ = e.EventSink.Emit(c.Request().Context(), contracts.DomainEvent{
+		ID: id, Kind: kind, OccurredAt: time.Now(), Attributes: map[string]string{"reason": reason},
+	})
 }
 
 func (e SessionEndpoints) logout(c *webkit.Context) error {

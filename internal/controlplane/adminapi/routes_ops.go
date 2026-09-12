@@ -155,6 +155,7 @@ func (s *Server) me(c *webkit.Context) error {
 		username = session.AdminID
 	}
 	result["username"] = username
+	result["authMethod"] = session.EffectiveAuthMethod()
 	// Local accounts expose their reset-email address so the console can
 	// prefill the account menu; IdP-only sessions simply omit it.
 	if s.userStore != nil {

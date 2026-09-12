@@ -31,10 +31,13 @@ type FinOpsView struct {
 	// SavedTokens is the would-be provider token load avoided by exact and
 	// semantic cache hits in the ledger window.
 	SavedTokens int64 `json:"savedTokens"`
-	// CacheSavings is an avoidable-cost estimate (USD) from those saved tokens,
-	// priced at a documented blended per-million-token rate. It is an estimate,
-	// not a provider invoice.
-	CacheSavings    float64                `json:"cacheSavings"`
+	// CacheSavings is an avoidable-cost estimate (USD) for the subset of saved
+	// tokens that resolves to one reference-priced upstream model.
+	CacheSavings        float64 `json:"cacheSavings"`
+	PricedSavedTokens   int64   `json:"pricedSavedTokens"`
+	UnpricedSavedTokens int64   `json:"unpricedSavedTokens"`
+	EstimateVersion     string  `json:"estimateVersion"`
+
 	ByProject       []FinOpsProjectRow     `json:"byProject"`
 	ByModel         []FinOpsModelRow       `json:"byModel"`
 	Recommendations []FinOpsRecommendation `json:"recommendations"`
@@ -127,22 +130,35 @@ type MeView struct {
 type AuditRecord = audit.Record
 
 type FinOpsProjectRow struct {
-	ProjectID    string  `json:"projectId"`
-	Requests     int64   `json:"requests"`
-	InputTokens  int64   `json:"inputTokens"`
-	OutputTokens int64   `json:"outputTokens"`
-	Spend        float64 `json:"spend"`
+	ProjectID           string  `json:"projectId"`
+	Requests            int64   `json:"requests"`
+	InputTokens         int64   `json:"inputTokens"`
+	OutputTokens        int64   `json:"outputTokens"`
+	Spend               float64 `json:"spend"`
+	CacheHits           int64   `json:"cacheHits"`
+	SemanticHits        int64   `json:"semanticHits"`
+	CacheHitRate        float64 `json:"cacheHitRate"`
+	SavedTokens         int64   `json:"savedTokens"`
+	PricedSavedTokens   int64   `json:"pricedSavedTokens"`
+	UnpricedSavedTokens int64   `json:"unpricedSavedTokens"`
+	CacheSavings        float64 `json:"cacheSavings"`
 }
 
 type FinOpsModelRow struct {
-	LogicalModel  string  `json:"logicalModel"`
-	Requests      int64   `json:"requests"`
-	InputTokens   int64   `json:"inputTokens"`
-	OutputTokens  int64   `json:"outputTokens"`
-	Spend         float64 `json:"spend"`
-	RetryCount    int     `json:"retryCount"`
-	FallbackCount int     `json:"fallbackCount"`
-	SavedTokens   int64   `json:"savedTokens"`
+	LogicalModel        string  `json:"logicalModel"`
+	Requests            int64   `json:"requests"`
+	InputTokens         int64   `json:"inputTokens"`
+	OutputTokens        int64   `json:"outputTokens"`
+	Spend               float64 `json:"spend"`
+	RetryCount          int     `json:"retryCount"`
+	FallbackCount       int     `json:"fallbackCount"`
+	SavedTokens         int64   `json:"savedTokens"`
+	CacheHits           int64   `json:"cacheHits"`
+	SemanticHits        int64   `json:"semanticHits"`
+	CacheHitRate        float64 `json:"cacheHitRate"`
+	PricedSavedTokens   int64   `json:"pricedSavedTokens"`
+	UnpricedSavedTokens int64   `json:"unpricedSavedTokens"`
+	CacheSavings        float64 `json:"cacheSavings"`
 }
 
 type FinOpsRecommendation struct {

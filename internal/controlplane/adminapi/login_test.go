@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/F31/liteAIG/internal/kernel/contracts"
 	"github.com/F31/liteAIG/internal/platform/webkit"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,89 @@ func (v *verifier) Verify(_ context.Context, _ string, password []byte) (Session
 	v.password = append([]byte(nil), password...)
 	return Session{AdminID: "admin", TenantID: "tenant"}, nil
 }
+
+type rejectingVerifier struct{ calls int }
+
+func (v *rejectingVerifier) Verify(context.Context, string, []byte) (Session, error) {
+	v.calls++
+	return Session{}, errors.New("invalid credentials")
+}
+
+func TestLoginEmitsRedactedSecurityEvents(t *testing.T) {
+	newEndpoint := func(limiter *LoginLimiter) (*webkit.Engine, *rejectingVerifier, *recordingEventSinkAdmin) {
+		manager, _ := NewSessionManager(SessionConfig{CookieName: "lia", TTL: time.Hour, Secure: true}, &sessionClock{now: time.Unix(1, 0)}, bytes.NewReader(make([]byte, 64)))
+		verify := &rejectingVerifier{}
+		sink := &recordingEventSinkAdmin{}
+		mux := webkit.New()
+		SessionEndpoints{
+			Sessions: manager, Verifier: verify, MaxBodyBytes: 1024, LoginLimiter: limiter,
+			EventSink: sink, EventIDs: fakeIDGenerator{},
+		}.Register(mux)
+		return mux, verify, sink
+	}
+	login := func(mux http.Handler, username, password string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/session", bytes.NewReader(body))
+		request.RemoteAddr = "192.0.2.10:1234"
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		return response
+	}
+
+	t.Run("invalid credentials", func(t *testing.T) {
+		mux, _, sink := newEndpoint(nil)
+		response := login(mux, "alice", "not-secret")
+		if response.Code != http.StatusUnauthorized || len(sink.events) != 1 {
+			t.Fatalf("status=%d events=%+v", response.Code, sink.events)
+		}
+		event := sink.events[0]
+		if event.Kind != "admin.security.login_failed" || event.Attributes["reason"] != "invalid_credentials" || event.ID == "" {
+			t.Fatalf("event=%+v", event)
+		}
+		for _, forbidden := range []string{"username", "password", "ip", "account_id"} {
+			if _, exists := event.Attributes[forbidden]; exists {
+				t.Fatalf("event leaked %s: %+v", forbidden, event)
+			}
+		}
+	})
+
+	t.Run("account limit", func(t *testing.T) {
+		mux, _, sink := newEndpoint(NewLoginLimiter(time.Minute, 1, 10))
+		_ = login(mux, "alice", "wrong-1")
+		response := login(mux, "alice", "wrong-2")
+		if response.Code != http.StatusTooManyRequests || len(sink.events) != 2 {
+			t.Fatalf("status=%d events=%+v", response.Code, sink.events)
+		}
+		event := sink.events[1]
+		if event.Kind != "admin.security.rate_limited" || event.Attributes["reason"] != "login_account_failure_limit" {
+			t.Fatalf("event=%+v", event)
+		}
+		_ = login(mux, "alice", "wrong-3")
+		if len(sink.events) != 2 {
+			t.Fatalf("repeated account denial emitted events=%+v", sink.events)
+		}
+	})
+
+	t.Run("ip limit", func(t *testing.T) {
+		mux, verify, sink := newEndpoint(NewLoginLimiter(time.Minute, 10, 1))
+		_ = login(mux, "alice", "wrong-1")
+		response := login(mux, "bob", "wrong-2")
+		if response.Code != http.StatusTooManyRequests || verify.calls != 1 || len(sink.events) != 2 {
+			t.Fatalf("status=%d calls=%d events=%+v", response.Code, verify.calls, sink.events)
+		}
+		event := sink.events[1]
+		if event.Kind != "admin.security.rate_limited" || event.Attributes["reason"] != "login_ip_attempt_limit" {
+			t.Fatalf("event=%+v", event)
+		}
+		_ = login(mux, "carol", "wrong-3")
+		if len(sink.events) != 2 {
+			t.Fatalf("repeated ip denial emitted events=%+v", sink.events)
+		}
+	})
+}
+
+var _ contracts.EventSink = (*recordingEventSinkAdmin)(nil)
+
 func TestLoginReturnsCSRFAndSecureCookieWithoutPassword(t *testing.T) {
 	manager, _ := NewSessionManager(SessionConfig{CookieName: "lia", TTL: time.Hour, Secure: true}, &sessionClock{now: time.Unix(1, 0)}, bytes.NewReader(make([]byte, 64)))
 	verifier := &verifier{}

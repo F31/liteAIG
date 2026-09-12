@@ -23,6 +23,7 @@ type LoginLimiter struct {
 	maxFailures int // per (ip|username), failures only
 	maxPerIP    int // per ip, all attempts
 	hits        map[string][]time.Time
+	reported    map[string]time.Time
 }
 
 // NewLoginLimiter returns a limiter bounding failed attempts per account and
@@ -37,7 +38,7 @@ func NewLoginLimiter(window time.Duration, maxFailures, maxPerIP int) *LoginLimi
 	if maxPerIP <= 0 {
 		maxPerIP = 20
 	}
-	return &LoginLimiter{window: window, maxFailures: maxFailures, maxPerIP: maxPerIP, hits: map[string][]time.Time{}}
+	return &LoginLimiter{window: window, maxFailures: maxFailures, maxPerIP: maxPerIP, hits: map[string][]time.Time{}, reported: map[string]time.Time{}}
 }
 
 // Window exposes the configured sliding window (for Retry-After hints).
@@ -80,6 +81,25 @@ func (l *LoginLimiter) IPAllowed(ip string, t time.Time) bool {
 // failure budget, and records the failure. Call it only after a failed verify.
 func (l *LoginLimiter) AccountBlocked(ip, username string, t time.Time) bool {
 	return !l.allow(ip+"|"+username, t, l.maxFailures, true)
+}
+
+// ReportBlock reports whether a limiter rejection should emit one durable
+// security event. Repeated denied requests for the same key are coalesced for
+// the limiter window so an attacker cannot grow the event outbox per request.
+func (l *LoginLimiter) ReportBlock(key string, t time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := t.Add(-l.window)
+	for existing, at := range l.reported {
+		if !at.After(cutoff) {
+			delete(l.reported, existing)
+		}
+	}
+	if at, exists := l.reported[key]; exists && at.After(cutoff) {
+		return false
+	}
+	l.reported[key] = t
+	return true
 }
 
 // clientIP extracts the peer IP from RemoteAddr for limiter keys.

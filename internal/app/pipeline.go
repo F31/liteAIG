@@ -101,22 +101,6 @@ func (p *litePipeline) effectiveRatePolicy() rate.Policy {
 	return p.ratePolicy
 }
 
-// defaultLitePriceVersion is the built-in provider price list (USD per
-// million tokens) used to derive ProviderCost when the tenant config carries
-// no pricing rules. Cache read/write rates follow the providers' published
-// prompt-cache pricing; a zero cache rate falls back to the base input rate.
-var defaultLitePriceVersion = pricing.PriceVersion{
-	ID: "lite-default-v1",
-	Rates: []pricing.Rate{
-		{Model: "gpt-4o-mini", Currency: "USD", InputPerMillion: 0.15, OutputPerMillion: 0.60, CacheReadPerMillion: 0.075},
-		{Model: "gpt-4o", Currency: "USD", InputPerMillion: 2.50, OutputPerMillion: 10.00, CacheReadPerMillion: 1.25},
-		{Model: "gpt-4.1", Currency: "USD", InputPerMillion: 2.00, OutputPerMillion: 8.00, CacheReadPerMillion: 0.50},
-		{Model: "o1-mini", Currency: "USD", InputPerMillion: 1.10, OutputPerMillion: 4.40, CacheReadPerMillion: 0.55},
-		{Model: "claude-3-5-sonnet", Currency: "USD", InputPerMillion: 3.00, OutputPerMillion: 15.00, CacheReadPerMillion: 0.30, CacheWritePerMillion: 3.75},
-		{Model: "claude-3-5-haiku", Currency: "USD", InputPerMillion: 0.80, OutputPerMillion: 4.00, CacheReadPerMillion: 0.08, CacheWritePerMillion: 1.00},
-	},
-}
-
 // Run implements playground.Pipeline: it builds a per-request runner so the
 // routing plan and execution result flow into accounting without shared state.
 func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) (runErr error) {
@@ -718,7 +702,7 @@ func (p *litePipeline) finalize(ctx context.Context, request *kernel.RequestCont
 		if request.Usage != nil {
 			cacheRead, cacheWrite = request.Usage.CacheReadTokens, request.Usage.CacheWriteTokens
 		}
-		if cost, err := pricing.PriceCached(defaultLitePriceVersion, deployment.UpstreamModel, "USD", inputTokens, outputTokens, cacheRead, cacheWrite); err == nil {
+		if cost, err := pricing.PriceCached(pricing.LiteReferencePriceVersion, deployment.UpstreamModel, "USD", inputTokens, outputTokens, cacheRead, cacheWrite); err == nil {
 			facts.providerCost = &cost
 			facts.providerCurrency = "USD"
 			request.ProviderCost = &cost

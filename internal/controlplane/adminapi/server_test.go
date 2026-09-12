@@ -127,6 +127,8 @@ type fakeBackend struct {
 	notificationUpdatedBy string
 	notificationDeletedBy string
 	defaultRulesImported  bool
+	revokeKeyCalls        int
+	federationReviewCalls int
 }
 
 func (b *fakeBackend) Setup(context.Context, json.RawMessage) (WizardSetupResponse, error) {
@@ -178,6 +180,7 @@ func (b *fakeBackend) CreateKey(context.Context, tenancy.TenantScope, apikey.Cre
 	return nil, nil
 }
 func (b *fakeBackend) RevokeKey(context.Context, tenancy.TenantScope, string, string) error {
+	b.revokeKeyCalls++
 	return nil
 }
 func (b *fakeBackend) ListKeys(context.Context, tenancy.TenantScope) ([]KeyResource, error) {
@@ -293,6 +296,7 @@ func (b *fakeBackend) FederationDiscover(context.Context, tenancy.TenantScope, F
 	return RelationshipView{Status: "candidate"}, nil
 }
 func (b *fakeBackend) FederationReview(context.Context, tenancy.TenantScope, string, FederationReviewInput, string) error {
+	b.federationReviewCalls++
 	return nil
 }
 func (b *fakeBackend) Approvals(context.Context, tenancy.TenantScope, int) ([]ApprovalView, error) {
@@ -396,6 +400,45 @@ func TestAdminSecurityEventsEmittedOnReauthAndRateLimit(t *testing.T) {
 	}
 	if len(sink.events) != 2 || sink.events[1].Kind != "admin.security.rate_limited" || sink.events[1].Attributes["account_id"] != "admin-1" {
 		t.Fatalf("rate-limit events = %+v", sink.events)
+	}
+}
+
+func TestKeyRevokeAndFederationApprovalRequireReauth(t *testing.T) {
+	backend := &fakeBackend{}
+	session := Session{AdminID: "admin-1", TenantID: "tenant", Role: rbac.RoleTenantAdmin}
+	server := New(AllOf(backend), authorizer{session: session}).
+		WithUserManagement(newFakeUserStore("admin-1", "admin", "hash"), fakePasswordVerifier{password: "correct-password"}, fakeIDGenerator{})
+	doRequest := func(path, body, reauth string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		if reauth != "" {
+			request.Header.Set("X-Reauth-Token", reauth)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+
+	withoutReauth := doRequest("/api/admin/keys/key-1/revoke", "", "")
+	if withoutReauth.Code != http.StatusUnauthorized || backend.revokeKeyCalls != 0 {
+		t.Fatalf("revoke without reauth status=%d calls=%d", withoutReauth.Code, backend.revokeKeyCalls)
+	}
+	withReauth := doRequest("/api/admin/keys/key-1/revoke", "", "correct-password")
+	if withReauth.Code != http.StatusOK || backend.revokeKeyCalls != 1 {
+		t.Fatalf("revoke with reauth status=%d calls=%d body=%s", withReauth.Code, backend.revokeKeyCalls, withReauth.Body.String())
+	}
+
+	rejected := doRequest("/api/admin/federation/rel-1/review", `{"approved":false}`, "")
+	if rejected.Code != http.StatusOK || backend.federationReviewCalls != 1 {
+		t.Fatalf("reject status=%d calls=%d body=%s", rejected.Code, backend.federationReviewCalls, rejected.Body.String())
+	}
+	approvalWithoutReauth := doRequest("/api/admin/federation/rel-1/review", `{"approved":true}`, "")
+	if approvalWithoutReauth.Code != http.StatusUnauthorized || backend.federationReviewCalls != 1 {
+		t.Fatalf("approve without reauth status=%d calls=%d", approvalWithoutReauth.Code, backend.federationReviewCalls)
+	}
+	approved := doRequest("/api/admin/federation/rel-1/review", `{"approved":true}`, "correct-password")
+	if approved.Code != http.StatusOK || backend.federationReviewCalls != 2 {
+		t.Fatalf("approve with reauth status=%d calls=%d body=%s", approved.Code, backend.federationReviewCalls, approved.Body.String())
 	}
 }
 
@@ -561,10 +604,10 @@ func TestSystemConfigAdminSurface(t *testing.T) {
 	}
 
 	put := httptest.NewRecorder()
-	putRequest := httptest.NewRequest(http.MethodPut, "/api/admin/system/config", strings.NewReader(`{"tenant_defaults":{"allowed_data_regions":["eu"],"residency_enforcement":"strict"}}`))
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/admin/system/config", strings.NewReader(`{"tenant_defaults":{"allowed_data_regions":["eu"],"residency_enforcement":"strict"},"file_mapping_retention_days":30}`))
 	putRequest.Header.Set("X-Reauth-Token", "correct-password")
 	system.ServeHTTP(put, putRequest)
-	if put.Code != http.StatusOK || backend.stored.TenantDefaults.ResidencyEnforcement != "strict" || len(backend.stored.TenantDefaults.AllowedDataRegions) != 1 {
+	if put.Code != http.StatusOK || backend.stored.TenantDefaults.ResidencyEnforcement != "strict" || len(backend.stored.TenantDefaults.AllowedDataRegions) != 1 || backend.stored.FileMappingRetentionDays != 30 {
 		t.Fatalf("system config PUT status=%d body=%s stored=%+v", put.Code, put.Body.String(), backend.stored)
 	}
 	if systemAuditCalls != 1 {
@@ -583,6 +626,21 @@ func TestSystemConfigAdminSurface(t *testing.T) {
 	system.ServeHTTP(invalid, invalidRequest)
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid system config status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	negative := httptest.NewRecorder()
+	negativeRequest := httptest.NewRequest(http.MethodPut, "/api/admin/system/config", strings.NewReader(`{"file_mapping_retention_days":-1}`))
+	negativeRequest.Header.Set("X-Reauth-Token", "correct-password")
+	system.ServeHTTP(negative, negativeRequest)
+	if negative.Code != http.StatusBadRequest {
+		t.Fatalf("negative retention status=%d body=%s", negative.Code, negative.Body.String())
+	}
+	tooLarge := httptest.NewRecorder()
+	tooLargeRequest := httptest.NewRequest(http.MethodPut, "/api/admin/system/config", strings.NewReader(`{"file_mapping_retention_days":3651}`))
+	tooLargeRequest.Header.Set("X-Reauth-Token", "correct-password")
+	system.ServeHTTP(tooLarge, tooLargeRequest)
+	if tooLarge.Code != http.StatusBadRequest {
+		t.Fatalf("excessive retention status=%d body=%s", tooLarge.Code, tooLarge.Body.String())
 	}
 
 	deny := httptest.NewRecorder()

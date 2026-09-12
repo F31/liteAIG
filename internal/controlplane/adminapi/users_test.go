@@ -389,4 +389,8 @@ func TestApprovalsAndFederationAllowOperator(t *testing.T) {
 	if opSuspend.Code != http.StatusOK {
 		t.Fatalf("operator suspend status=%d", opSuspend.Code)
 	}
+	opReview := doUsersRequest(t, operator, http.MethodPost, "/api/admin/federation/rel-1/review", `{"approved":false}`)
+	if opReview.Code != http.StatusForbidden {
+		t.Fatalf("operator review status=%d want 403", opReview.Code)
+	}
 }

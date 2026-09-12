@@ -224,9 +224,9 @@ func TestA2AAgentCardLifecycleLoop(t *testing.T) {
 	}
 
 	// 3. Approval with grants activates the relationship.
-	status, body = doJSON(t, admin.URL+"/api/admin/federation/"+discovered.ID+"/review", "POST", map[string]any{
+	status, body = doJSONFullReauth(t, admin.URL+"/api/admin/federation/"+discovered.ID+"/review", "POST", map[string]any{
 		"approved": true, "projectGrants": []string{projectID}, "capabilityGrants": []string{"chat"},
-	}, cookies, session.CSRFToken)
+	}, cookies, session.CSRFToken, "password-123456")
 	if status != http.StatusOK {
 		t.Fatalf("review status = %d body = %s", status, body)
 	}

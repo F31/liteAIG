@@ -106,7 +106,7 @@ func TestLocalVerifierReturnsBoundTenantWithoutHash(t *testing.T) {
 	if err != nil || session.AdminID != "admin" || session.TenantID != "tenant" {
 		t.Fatalf("Verify()=%+v,%v", session, err)
 	}
-	if session.Username != "admin" || session.Role != "viewer" {
+	if session.Username != "admin" || session.Role != "viewer" || session.AuthMethod != "local" {
 		t.Fatalf("Verify() session identity = %+v, want username=admin role=viewer", session)
 	}
 	verifier.Passwords = passwordVerifier{false}

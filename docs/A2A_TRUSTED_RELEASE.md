@@ -43,8 +43,8 @@ that remain outside the in-repo conformance suite.
   Helm template, and strict kubeconform schema validation. The `image` CI job
   and `release.yaml` validate the container image itself.
 - The split-plane topology (multiple `gateway` replicas sharing Postgres +
-  Redis coordination) is exercised by chaos/single-instance tests but not yet by
-  a multi-replica K8s e2e in CI.
+  Redis coordination) is exercised by chaos tests and the `k8s-kind-standard`
+  multi-replica CI job, including convergence, pod replacement, and readiness.
 - Tenant webhook notification desired state is covered by
   `GET|PUT|DELETE /api/admin/alerts/notifications`; updates hot-reload the
   current process. An explicit startup `--webhook-url`/`LiteOptions.WebhookURL`

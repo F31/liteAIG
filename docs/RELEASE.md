@@ -8,10 +8,12 @@ Run it from a clean workspace before creating a `v*` tag.
 - Formatting: `test -z "$(gofmt -l .)"`
 - Go static checks: `go vet ./...`
 - Architecture boundaries: `go run ./cmd/architecture-test`
+- Stable Gateway contract compatibility:
+  `git show origin/main:architecture/openapi.json >/tmp/openapi-base.json && go run ./cmd/openapi-compat -before /tmp/openapi-base.json -after architecture/openapi.json`
 - Full Go tests: `go test -count=1 ./...`
 - Race-sensitive A2A worker smoke:
   `go test -race -count=1 ./internal/app -run 'TestA2APushWorkerTwoProcessDeliversExactlyOnce|TestA2APushWorkerTwoRacingWorkersDeliverExactlyOnce'`
-- Go vulnerability scan: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+- Go vulnerability scan: `go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...`
 - Console checks: `npm run check` in `web/console`
 - Console production dependency audit:
   `NPM_CONFIG_REGISTRY=https://registry.npmjs.org npm audit --omit=dev --audit-level=high` in `web/console`

@@ -35,6 +35,20 @@ export default function FinOps() {
         </Card>
         <Card loading={finops.isLoading}>
           <Statistic
+            title={t("finops.cacheSavings")}
+            value={finops.data?.cacheSavings ?? 0}
+            precision={4}
+            prefix="$"
+            suffix={finops.data?.estimateVersion ?? ""}
+          />
+          <Typography.Text type="secondary">
+            {t("finops.unpricedSavedTokens", {
+              count: finops.data?.unpricedSavedTokens ?? 0,
+            })}
+          </Typography.Text>
+        </Card>
+        <Card loading={finops.isLoading}>
+          <Statistic
             title={t("finops.requests")}
             value={finops.data?.requests ?? 0}
           />
@@ -130,6 +144,18 @@ export default function FinOps() {
               render: (_, row) => row.inputTokens + row.outputTokens,
             },
             { title: t("finops.spend"), render: (_, row) => money(row.spend) },
+            {
+              title: t("finops.cacheHitRate"),
+              render: (_, row) => percent(row.cacheHitRate),
+            },
+            {
+              title: t("finops.cacheSavings"),
+              render: (_, row) => money(row.cacheSavings),
+            },
+            {
+              title: t("finops.unpriced"),
+              dataIndex: "unpricedSavedTokens",
+            },
           ]}
         />
       </Card>
@@ -142,6 +168,18 @@ export default function FinOps() {
             { title: t("finops.model"), dataIndex: "logicalModel" },
             { title: t("finops.requests"), dataIndex: "requests" },
             { title: t("finops.spend"), render: (_, row) => money(row.spend) },
+            {
+              title: t("finops.cacheHitRate"),
+              render: (_, row) => percent(row.cacheHitRate),
+            },
+            {
+              title: t("finops.cacheSavings"),
+              render: (_, row) => money(row.cacheSavings),
+            },
+            {
+              title: t("finops.unpriced"),
+              dataIndex: "unpricedSavedTokens",
+            },
             { title: t("finops.retries"), dataIndex: "retryCount" },
             { title: t("finops.fallbacks"), dataIndex: "fallbackCount" },
           ]}

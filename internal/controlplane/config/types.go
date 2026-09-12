@@ -8,8 +8,13 @@ import (
 
 const SchemaV1 = "v1"
 
+// MaxFileMappingRetentionDays bounds destructive cutoff arithmetic to ten
+// years while allowing 0 to mean that automatic cleanup is disabled.
+const MaxFileMappingRetentionDays = 3650
+
 type SystemConfig struct {
-	TenantDefaults TenantPolicyDefaults `json:"tenant_defaults,omitempty"`
+	TenantDefaults           TenantPolicyDefaults `json:"tenant_defaults,omitempty"`
+	FileMappingRetentionDays int                  `json:"file_mapping_retention_days,omitempty"`
 }
 
 type TenantPolicyDefaults struct {

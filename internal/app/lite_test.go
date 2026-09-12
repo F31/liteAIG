@@ -150,7 +150,7 @@ func TestLiteManagementPlaneEndToEnd(t *testing.T) {
 	}
 
 	// A revoked key must stop working immediately.
-	status, _ = doJSON(t, server.URL+"/api/admin/keys/"+createKeyResult.Record.ID+"/revoke", "POST", nil, cookies, sessionResult.CSRFToken)
+	status, _ = doJSONFullReauth(t, server.URL+"/api/admin/keys/"+createKeyResult.Record.ID+"/revoke", "POST", nil, cookies, sessionResult.CSRFToken, "password-123456")
 	if status != http.StatusOK {
 		t.Fatalf("revoke key status = %d", status)
 	}
@@ -569,6 +569,35 @@ func doJSON(t *testing.T, url, method string, payload any, cookies, csrf string)
 	t.Helper()
 	status, body, _ := doJSONFull(t, url, method, payload, cookies, csrf)
 	return status, body
+}
+
+func doJSONFullReauth(t *testing.T, url, method string, payload any, cookies, csrf, reauth string) (int, string) {
+	t.Helper()
+	var reader io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(data)
+	}
+	request, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("Cookie", cookies)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("X-Reauth-Token", reauth)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(body)
 }
 
 func doJSONFull(t *testing.T, url, method string, payload any, cookies string, csrf ...string) (int, string, string) {

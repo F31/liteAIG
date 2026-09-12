@@ -80,6 +80,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -176,6 +178,19 @@ jobs:
 
       - name: Enforce architecture boundaries
         run: go run ./cmd/architecture-test
+
+      - name: Check OpenAPI compatibility
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          before=architecture/openapi.json
+          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}:architecture/openapi.json" 2>/dev/null; then
+            git show "${BASE_SHA}:architecture/openapi.json" > /tmp/openapi-base.json
+            before=/tmp/openapi-base.json
+          else
+            echo "No historical OpenAPI baseline found; validating bootstrap snapshot."
+          fi
+          go run ./cmd/openapi-compat -before "${before}" -after architecture/openapi.json
 
       - name: Guardrail benchmark report
         run: go run ./cmd/benchmark --baseline tests/benchmark/baseline-report.json --out /tmp/benchmark-report.json

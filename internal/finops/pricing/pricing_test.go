@@ -32,6 +32,19 @@ func TestPricingGolden(t *testing.T) {
 	}
 }
 
+func TestLiteReferencePriceVersion(t *testing.T) {
+	if LiteReferencePriceVersion.ID != "lite-reference-v1" {
+		t.Fatalf("version=%q", LiteReferencePriceVersion.ID)
+	}
+	charge, err := Price(LiteReferencePriceVersion, "gpt-4o-mini", "USD", 1_000_000, 1_000_000)
+	if err != nil || charge != 0.75 {
+		t.Fatalf("charge=%f err=%v", charge, err)
+	}
+	if _, err := Price(LiteReferencePriceVersion, "unknown", "USD", 1, 1); err != ErrNoRate {
+		t.Fatalf("unknown model err=%v", err)
+	}
+}
+
 // TestPriceCachedGolden verifies cache read/write tokens are priced at their
 // declared cache rates while the base input/output keep their rates.
 func TestPriceCachedGolden(t *testing.T) {

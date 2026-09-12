@@ -5,6 +5,7 @@ import {
   Input,
   InputNumber,
   message,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -13,6 +14,7 @@ import {
   Tabs,
   Typography,
 } from "antd";
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -49,11 +51,15 @@ export default function Governance() {
   const { t } = useTranslation("governance");
   const role = useAuth((state) => state.role);
   const scopes = useAuth((state) => state.scopes);
+  const authMethod = useAuth((state) => state.authMethod);
   const canWrite = isAdminRole(role);
   const canDecide = hasPermission(scopes, "approval.decide");
   const canSuspend = hasPermission(scopes, "external_agent.suspend");
+  const canReview = hasPermission(scopes, "external_agent.review");
   const canGrantDelegation = hasPermission(scopes, "delegation.grant");
   const canRevokeDelegation = hasPermission(scopes, "delegation.revoke");
+  const [activationTarget, setActivationTarget] = useState<string>();
+  const [activationPassword, setActivationPassword] = useState("");
   const runtime = useQuery({
     queryKey: ["governance"],
     queryFn: () => api<RuntimeResources>("/api/admin/governance"),
@@ -210,10 +216,11 @@ export default function Governance() {
     onError: () => void message.error(t("discoverFailed")),
   });
   const activate = useMutation({
-    mutationFn: (id: string) => {
+    mutationFn: (input: { id: string; password: string }) => {
       const projectId = projects.data?.[0]?.id ?? "";
-      return api(`/api/admin/federation/${id}/review`, {
+      return api(`/api/admin/federation/${input.id}/review`, {
         method: "POST",
+        headers: { "X-Reauth-Token": input.password },
         body: JSON.stringify({
           approved: true,
           projectGrants: projectId ? [projectId] : [],
@@ -251,12 +258,18 @@ export default function Governance() {
             {t("suspend")}
           </Button>
         ) : (row.status === "candidate" || row.status === "pending_review") &&
-          canSuspend ? (
+          canReview ? (
           <Button
             size="small"
             type="primary"
             loading={activate.isPending}
-            onClick={() => activate.mutate(row.id)}
+            disabled={authMethod === "oidc"}
+            title={
+              authMethod === "oidc"
+                ? t("errors.REAUTH_UNAVAILABLE", { ns: "common" })
+                : undefined
+            }
+            onClick={() => setActivationTarget(row.id)}
           >
             {t("activate")}
           </Button>
@@ -1021,6 +1034,32 @@ export default function Governance() {
           },
         ]}
       />
+      <Modal
+        title={t("activate")}
+        open={Boolean(activationTarget)}
+        confirmLoading={activate.isPending}
+        okButtonProps={{ disabled: !activationPassword }}
+        onCancel={() => {
+          setActivationTarget(undefined);
+          setActivationPassword("");
+        }}
+        onOk={async () => {
+          if (!activationTarget || !activationPassword) return;
+          await activate.mutateAsync({
+            id: activationTarget,
+            password: activationPassword,
+          });
+          setActivationTarget(undefined);
+          setActivationPassword("");
+        }}
+      >
+        <Input.Password
+          autoComplete="current-password"
+          placeholder={t("reauth")}
+          value={activationPassword}
+          onChange={(event) => setActivationPassword(event.target.value)}
+        />
+      </Modal>
     </section>
   );
 }

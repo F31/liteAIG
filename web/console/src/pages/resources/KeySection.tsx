@@ -6,7 +6,7 @@ import {
   Form,
   Input,
   message,
-  Popconfirm,
+  Modal,
   Select,
   Space,
   Table,
@@ -16,11 +16,12 @@ import {
 } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { api } from "../../api/client";
+import { APIError, api } from "../../api/client";
 import { shortID } from "./helpers";
 import type { APIKey, APIKeyCreateResult, APIKeyFormValues } from "./types";
 import type { ProjectsQuery, RuntimeQuery } from "./sections";
 import type { ResourceRows } from "./useResourceRows";
+import { useAuth } from "../../state/auth";
 
 // KeySection renders the access keys table, the one-time key reveal panel,
 // and the key creation drawer.
@@ -36,9 +37,12 @@ export function KeySection({
   rows: ResourceRows;
 }) {
   const { t } = useTranslation();
+  const authMethod = useAuth((state) => state.authMethod);
   const [keyForm] = Form.useForm<APIKeyFormValues>();
   const [keyDrawerOpen, setKeyDrawerOpen] = useState(false);
   const [createdKey, setCreatedKey] = useState<string>();
+  const [revokeTarget, setRevokeTarget] = useState<string>();
+  const [revokePassword, setRevokePassword] = useState("");
   const keys = useQuery({
     queryKey: ["admin-keys"],
     queryFn: () => api<APIKey[]>("/api/admin/keys"),
@@ -72,15 +76,22 @@ export function KeySection({
     },
   });
   const revokeKey = useMutation({
-    mutationFn: (id: string) =>
-      api(`/api/admin/keys/${encodeURIComponent(id)}/revoke`, {
+    mutationFn: (input: { id: string; password: string }) =>
+      api(`/api/admin/keys/${encodeURIComponent(input.id)}/revoke`, {
         method: "POST",
+        headers: { "X-Reauth-Token": input.password },
       }),
     onSuccess: () => {
       void runtime.refetch();
       void keys.refetch();
       void message.success(t("resources.keyRevoked"));
     },
+    onError: (error: unknown) =>
+      void message.error(
+        error instanceof APIError
+          ? t(`errors.${error.code}`)
+          : t("common.error"),
+      ),
   });
 
   const keyColumns = [
@@ -139,14 +150,20 @@ export function KeySection({
               </Button>
             </Tooltip>
             {row.status === "active" && (
-              <Popconfirm
-                title={t("resources.revokeKey")}
-                onConfirm={() => revokeKey.mutate(row.id)}
+              <Button
+                size="small"
+                danger
+                loading={revokeKey.isPending}
+                disabled={authMethod === "oidc"}
+                title={
+                  authMethod === "oidc"
+                    ? t("errors.REAUTH_UNAVAILABLE")
+                    : undefined
+                }
+                onClick={() => setRevokeTarget(row.id)}
               >
-                <Button size="small" danger loading={revokeKey.isPending}>
-                  {t("resources.revoke")}
-                </Button>
-              </Popconfirm>
+                {t("resources.revoke")}
+              </Button>
             )}
           </Space>
         ) : null,
@@ -245,6 +262,32 @@ export function KeySection({
           </Space>
         </Form>
       </Drawer>
+      <Modal
+        title={t("resources.revokeKey")}
+        open={Boolean(revokeTarget)}
+        confirmLoading={revokeKey.isPending}
+        okButtonProps={{ disabled: !revokePassword }}
+        onCancel={() => {
+          setRevokeTarget(undefined);
+          setRevokePassword("");
+        }}
+        onOk={async () => {
+          if (!revokeTarget || !revokePassword) return;
+          await revokeKey.mutateAsync({
+            id: revokeTarget,
+            password: revokePassword,
+          });
+          setRevokeTarget(undefined);
+          setRevokePassword("");
+        }}
+      >
+        <Input.Password
+          autoComplete="current-password"
+          placeholder={t("governance:reauth")}
+          value={revokePassword}
+          onChange={(event) => setRevokePassword(event.target.value)}
+        />
+      </Modal>
     </Card>
   );
 }

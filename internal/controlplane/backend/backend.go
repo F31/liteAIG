@@ -10,6 +10,7 @@ import (
 	controlrecommend "github.com/F31/liteAIG/internal/controlplane/recommend"
 	"github.com/F31/liteAIG/internal/finops/accounting"
 	"github.com/F31/liteAIG/internal/finops/aggregate"
+	"github.com/F31/liteAIG/internal/finops/pricing"
 	guardraildomain "github.com/F31/liteAIG/internal/guardrail"
 	guardrailbench "github.com/F31/liteAIG/internal/guardrail/benchmark"
 	"github.com/F31/liteAIG/internal/identity/apikey"
@@ -36,11 +37,6 @@ type LiveBus struct {
 	mu      sync.Mutex
 	clients map[chan LiveEvent]struct{}
 }
-
-// cacheChargePerMillion is the documented blended USD per-million-token rate
-// used to estimate avoided provider cost from cache hits. It is an estimate,
-// not a provider invoice; real rates vary by model and provider.
-const cacheChargePerMillion = 2.0
 
 func moneyText(value float64) string {
 	return fmt.Sprintf("$%.2f", value)
@@ -741,7 +737,7 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 	if err != nil {
 		return FinOpsView{}, err
 	}
-	view := FinOpsView{}
+	view := FinOpsView{EstimateVersion: pricing.LiteReferencePriceVersion.ID}
 	projects := map[string]*FinOpsProjectRow{}
 	models := map[string]*FinOpsModelRow{}
 	var projectOrder, modelOrder []string
@@ -760,15 +756,23 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 		if request.Source == "semantic_cache" {
 			view.SemanticHits++
 		}
-		// A cache hit avoided the full would-be provider token load. The ledger
-		// records the full input/output on the cached request (no provider call
-		// was made), so those tokens are the saved load. CacheSavings is a
-		// documented blended estimate, never a provider invoice.
+		// A cache hit avoided the full would-be provider token load. Dollar
+		// savings are reported only when the historical record resolves
+		// unambiguously to one reference-priced upstream model.
 		savedTokens := int64(0)
+		cacheSavings := 0.0
+		pricedSavedTokens := int64(0)
 		if request.Source == "cache" || request.Source == "semantic_cache" {
 			savedTokens = request.InputTokens + request.OutputTokens
 			view.SavedTokens += savedTokens
-			view.CacheSavings += aggregate.QuantifyOptimizationCost(request, cacheChargePerMillion, savedTokens).CacheSavings
+			if estimate, ok := b.cacheSavingsEstimate(scope, request); ok {
+				cacheSavings = estimate
+				pricedSavedTokens = savedTokens
+				view.CacheSavings += estimate
+				view.PricedSavedTokens += savedTokens
+			} else {
+				view.UnpricedSavedTokens += savedTokens
+			}
 		}
 		optimization := aggregate.QuantifyOptimizationCost(request, 0, 0)
 		view.RetryCost += optimization.RetryCost
@@ -787,6 +791,16 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 		project.InputTokens += request.InputTokens
 		project.OutputTokens += request.OutputTokens
 		project.Spend += cost
+		if request.Source == "cache" {
+			project.CacheHits++
+		}
+		if request.Source == "semantic_cache" {
+			project.SemanticHits++
+		}
+		project.SavedTokens += savedTokens
+		project.PricedSavedTokens += pricedSavedTokens
+		project.UnpricedSavedTokens += savedTokens - pricedSavedTokens
+		project.CacheSavings += cacheSavings
 		modelID := request.LogicalModel
 		if modelID == "" {
 			modelID = "unknown"
@@ -802,13 +816,24 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 		model.OutputTokens += request.OutputTokens
 		model.Spend += cost
 		model.SavedTokens += savedTokens
+		model.PricedSavedTokens += pricedSavedTokens
+		model.UnpricedSavedTokens += savedTokens - pricedSavedTokens
+		model.CacheSavings += cacheSavings
+		if request.Source == "cache" {
+			model.CacheHits++
+		}
+		if request.Source == "semantic_cache" {
+			model.SemanticHits++
+		}
 		model.RetryCount += request.RetryCount
 		model.FallbackCount += request.FallbackCount
 	}
 	for _, id := range projectOrder {
+		projects[id].CacheHitRate = float64(projects[id].CacheHits+projects[id].SemanticHits) / float64(projects[id].Requests)
 		view.ByProject = append(view.ByProject, *projects[id])
 	}
 	for _, id := range modelOrder {
+		models[id].CacheHitRate = float64(models[id].CacheHits+models[id].SemanticHits) / float64(models[id].Requests)
 		view.ByModel = append(view.ByModel, *models[id])
 	}
 	if view.Requests > 0 {
@@ -819,6 +844,48 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 	sort.SliceStable(view.ByModel, func(i, j int) bool { return view.ByModel[i].Spend > view.ByModel[j].Spend })
 	view.Recommendations = finopsRecommendations(view)
 	return view, nil
+}
+
+func (b *ControlBackend) cacheSavingsEstimate(scope tenancy.TenantScope, request accounting.RequestRecord) (float64, bool) {
+	if b.registry == nil {
+		return 0, false
+	}
+	snapshot, ok := b.registry.TenantByID(scope.TenantID)
+	if !ok || request.SnapshotVersion > 0 && request.SnapshotVersion != snapshot.Version {
+		return 0, false
+	}
+	upstreamModel := ""
+	if request.DeploymentID != "" {
+		deployment, exists := snapshot.Deployment(request.DeploymentID)
+		if !exists {
+			return 0, false
+		}
+		upstreamModel = deployment.UpstreamModel
+	} else {
+		logical, exists := snapshot.LogicalModel(request.LogicalModel)
+		if !exists {
+			return 0, false
+		}
+		route, exists := snapshot.RoutePolicy(logical.RoutePolicyID)
+		if !exists {
+			return 0, false
+		}
+		for _, deploymentID := range route.DeploymentIDs {
+			deployment, exists := snapshot.Deployment(deploymentID)
+			if !exists || deployment.Status != "enabled" || deployment.UpstreamModel == "" {
+				continue
+			}
+			if upstreamModel != "" && upstreamModel != deployment.UpstreamModel {
+				return 0, false
+			}
+			upstreamModel = deployment.UpstreamModel
+		}
+	}
+	if upstreamModel == "" {
+		return 0, false
+	}
+	estimate, err := pricing.Price(pricing.LiteReferencePriceVersion, upstreamModel, "USD", request.InputTokens, request.OutputTokens)
+	return estimate, err == nil
 }
 
 func (b *ControlBackend) Recommendations(ctx context.Context, scope tenancy.TenantScope) ([]RecommendationView, error) {
@@ -845,7 +912,7 @@ func finopsRecommendations(view FinOpsView) []FinOpsRecommendation {
 		items = append(items, FinOpsRecommendation{Kind: "routing", Title: "Review retry and fallback costs", Detail: "Retries or fallback attempts are adding provider spend. Check provider health and route ordering.", Impact: view.RetryCost + view.FallbackCost})
 	}
 	if view.CacheHits+view.SemanticHits > 0 {
-		items = append(items, FinOpsRecommendation{Kind: "cache", Title: "Cache is avoiding duplicate provider calls", Detail: fmt.Sprintf("Cache hits avoided ~%d provider tokens (estimated %s in avoided cost using the blended $%.2f/M rate).", view.SavedTokens, moneyText(view.CacheSavings), cacheChargePerMillion), Impact: view.CacheSavings})
+		items = append(items, FinOpsRecommendation{Kind: "cache", Title: "Cache is avoiding duplicate provider calls", Detail: fmt.Sprintf("Cache hits avoided ~%d provider tokens; %d were priced at %s reference rates for an estimated %s avoided cost (%d unpriced). This is not provider billing.", view.SavedTokens, view.PricedSavedTokens, view.EstimateVersion, moneyText(view.CacheSavings), view.UnpricedSavedTokens), Impact: view.CacheSavings})
 	}
 	if len(view.ByProject) > 0 && view.ByProject[0].Spend > 0 {
 		items = append(items, FinOpsRecommendation{Kind: "attribution", Title: "Top project drives current spend", Detail: fmt.Sprintf("Project %s accounts for %.4f provider spend in the recent ledger window.", view.ByProject[0].ProjectID, view.ByProject[0].Spend), Impact: view.ByProject[0].Spend})

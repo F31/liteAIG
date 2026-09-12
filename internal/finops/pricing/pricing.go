@@ -36,6 +36,21 @@ type PriceVersion struct {
 	Rates       []Rate
 }
 
+// LiteReferencePriceVersion is the versioned built-in USD estimate used when
+// provider billing facts are unavailable. It is reference pricing, not invoice
+// reconciliation; callers must leave unknown models unpriced.
+var LiteReferencePriceVersion = PriceVersion{
+	ID: "lite-reference-v1",
+	Rates: []Rate{
+		{Model: "gpt-4o-mini", Currency: "USD", InputPerMillion: 0.15, OutputPerMillion: 0.60, CacheReadPerMillion: 0.075},
+		{Model: "gpt-4o", Currency: "USD", InputPerMillion: 2.50, OutputPerMillion: 10.00, CacheReadPerMillion: 1.25},
+		{Model: "gpt-4.1", Currency: "USD", InputPerMillion: 2.00, OutputPerMillion: 8.00, CacheReadPerMillion: 0.50},
+		{Model: "o1-mini", Currency: "USD", InputPerMillion: 1.10, OutputPerMillion: 4.40, CacheReadPerMillion: 0.55},
+		{Model: "claude-3-5-sonnet", Currency: "USD", InputPerMillion: 3.00, OutputPerMillion: 15.00, CacheReadPerMillion: 0.30, CacheWritePerMillion: 3.75},
+		{Model: "claude-3-5-haiku", Currency: "USD", InputPerMillion: 0.80, OutputPerMillion: 4.00, CacheReadPerMillion: 0.08, CacheWritePerMillion: 1.00},
+	},
+}
+
 func (v PriceVersion) rate(model, currency string) (Rate, bool) {
 	for _, rate := range v.Rates {
 		if rate.Model == model && rate.Currency == currency {

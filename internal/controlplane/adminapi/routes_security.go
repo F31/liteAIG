@@ -186,6 +186,11 @@ func (s *Server) federationReview(c *webkit.Context) error {
 	if err := c.Bind(&input, 0); err != nil {
 		return invalidRequest()
 	}
+	if input.Approved {
+		if err := s.requireReauth(c); err != nil {
+			return err
+		}
+	}
 	if err := s.federationSvc.FederationReview(c.Request().Context(), scopeOf(c), c.Param("id"), input, sessionFrom(c).AdminID); err != nil {
 		return webkit.NewAPIError(http.StatusBadRequest, "FEDERATION_REVIEW_FAILED", map[string]any{"reason": err.Error()})
 	}

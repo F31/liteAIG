@@ -126,7 +126,7 @@ func TestOIDCSessionResolvesRealTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.TenantID != "tenant-42" {
+	if session.TenantID != "tenant-42" || session.AuthMethod != "oidc" {
 		t.Fatalf("session tenant = %q, want tenant-42", session.TenantID)
 	}
 }

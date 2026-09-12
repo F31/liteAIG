@@ -28,15 +28,12 @@ func (s *Server) setSystemConfig(c *webkit.Context) error {
 	if err := s.requireReauth(c); err != nil {
 		return err
 	}
-	var input struct {
-		TenantDefaults config.TenantPolicyDefaults `json:"tenant_defaults,omitempty"`
-	}
-	if err := c.Bind(&input, 1<<20); err != nil {
+	var document config.SystemConfig
+	if err := c.Bind(&document, 1<<20); err != nil {
 		return invalidRequest()
 	}
-	document := config.SystemConfig{TenantDefaults: input.TenantDefaults}
-	if document.TenantDefaults.ResidencyEnforcement != "" && document.TenantDefaults.ResidencyEnforcement != "advisory" && document.TenantDefaults.ResidencyEnforcement != "strict" {
-		return webkit.NewAPIError(http.StatusBadRequest, "INVALID_REQUEST", map[string]any{"diagnostic": "residency_enforcement must be advisory or strict"})
+	if err := config.ValidateSystemConfig(document); err != nil {
+		return webkit.NewAPIError(http.StatusBadRequest, "INVALID_REQUEST", map[string]any{"diagnostic": err.Error()})
 	}
 	value, err := s.systemConfigSvc.SetSystemConfig(c.Request().Context(), document, sessionFrom(c).AdminID)
 	if err == nil {

@@ -143,7 +143,7 @@ func (o *OIDCLogin) session(c *webkit.Context) error {
 			tenantID = resolved
 		}
 	}
-	csrf, err := o.Sessions.Create(c.Response(), Session{AdminID: principal.ExternalSubject, TenantID: tenantID, Role: principal.Role})
+	csrf, err := o.Sessions.Create(c.Response(), Session{AdminID: principal.ExternalSubject, TenantID: tenantID, Role: principal.Role, AuthMethod: "oidc"})
 	if err != nil {
 		return internalError()
 	}

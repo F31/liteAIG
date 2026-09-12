@@ -24,7 +24,7 @@ import (
 	"github.com/F31/liteAIG/internal/tenancy"
 )
 
-type Session struct{ AdminID, TenantID, Username, Role string }
+type Session struct{ AdminID, TenantID, Username, Role, AuthMethod string }
 
 // EffectiveRole normalizes the session role. Sessions created before role
 // tracking (legacy single-admin installs) act as tenant admins.
@@ -33,6 +33,13 @@ func (s Session) EffectiveRole() string {
 		return rbac.RoleTenantAdmin
 	}
 	return s.Role
+}
+
+func (s Session) EffectiveAuthMethod() string {
+	if s.AuthMethod == "" {
+		return "local"
+	}
+	return s.AuthMethod
 }
 
 type Authorizer interface {
@@ -519,7 +526,7 @@ func (s *Server) registerRoutes() {
 		Handle("POST /federation/{id}/suspend", s.federationSuspend)
 	e.Group("/api/admin", s.requireAuth, s.requireTenantScope, s.rateLimitAdmin, s.requirePermission(rbac.PermExternalAgentSuspend)).
 		Handle("POST /federation/discover", s.federationDiscover)
-	e.Group("/api/admin", s.requireAuth, s.requireTenantScope, s.rateLimitAdmin, s.requirePermission(rbac.PermExternalAgentSuspend)).
+	e.Group("/api/admin", s.requireAuth, s.requireTenantScope, s.rateLimitAdmin, s.requirePermission(rbac.PermExternalAgentReview)).
 		Handle("POST /federation/{id}/review", s.federationReview)
 	read.Handle("GET /agent-graph/{rootTaskId}", s.agentGraph)
 	admin.Handle("GET /users", s.listUsers)
