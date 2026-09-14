@@ -15,16 +15,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.25.x"
           cache: true
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -32,7 +32,7 @@ jobs:
         run: bash scripts/build-console.sh
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload interop report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: a2a-interop-report
           path: /tmp/interop-report.json
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload model SDK interop report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: model-sdk-interop-report
           path: /tmp/model-sdk-interop-report.json
