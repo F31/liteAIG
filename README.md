@@ -145,7 +145,7 @@ flowchart TB
   subgraph STATE["State & Operations"]
     DB[(SQLite / PostgreSQL<br/>RLS + tenant pools)]
     RD[(Redis — Standard<br/>budget · leases · cache)]
-    SPOOL[(Accounting Spool / Outbox)]
+    SPOOL[(Accounting Spool)]
     OBS["OTLP · Prometheus · ClickHouse"]
   end
 
@@ -153,19 +153,23 @@ flowchart TB
   CONN --> UP["Model / Tool / Agent Providers"]
 
   UI --> CFG --> SIGN
-  SIGN -.->|Signed RuntimeBundle + LKG| PIPE
+  SIGN -.->|RuntimeBundle (signed in Standard/Enterprise) + LKG| PIPE
   CFG --> DB
 
   PIPE <-->|Standard only| RD
-  PIPE -.->|usage / audit| SPOOL
+  PIPE -.->|usage| SPOOL
   SPOOL --> DB
+  PIPE -.->|audit / events| DB
   PIPE -.->|async telemetry| OBS
 ```
 
-The diagram is intentionally compact. The control plane compiles and signs
-configuration; the data plane executes the fixed pipeline and uses external
-state only for coordination and the durable asynchronous tail. Solid edges are
-synchronous; dotted edges are control, deployment-specific, or asynchronous.
+The diagram is intentionally compact. The control plane compiles configuration
+and signs it in Standard/Enterprise (Lite can run from a local snapshot or
+checksum). The data plane executes the fixed pipeline and uses external state
+only for coordination and the durable asynchronous tail. Usage goes through the
+accounting spool when enabled; audit and domain events persist through the DB
+path. Solid edges are synchronous; dotted edges are control, deployment-specific,
+or asynchronous.
 
 ### Fixed seven-stage pipeline
 

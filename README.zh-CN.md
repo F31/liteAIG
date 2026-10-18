@@ -133,7 +133,7 @@ flowchart TB
   subgraph STATE["状态与运维"]
     DB[(SQLite / PostgreSQL<br/>RLS + 租户连接池)]
     RD[(Redis — Standard<br/>budget · leases · cache)]
-    SPOOL[(Accounting Spool / Outbox)]
+    SPOOL[(Accounting Spool)]
     OBS["OTLP · Prometheus · ClickHouse"]
   end
 
@@ -141,17 +141,20 @@ flowchart TB
   CONN --> UP["Model / Tool / Agent Providers"]
 
   UI --> CFG --> SIGN
-  SIGN -.->|Signed RuntimeBundle + LKG| PIPE
+  SIGN -.->|RuntimeBundle（Standard/Enterprise 签名）+ LKG| PIPE
   CFG --> DB
 
   PIPE <-->|Standard only| RD
-  PIPE -.->|usage / audit| SPOOL
+  PIPE -.->|usage| SPOOL
   SPOOL --> DB
+  PIPE -.->|audit / events| DB
   PIPE -.->|async telemetry| OBS
 ```
 
-该图有意保持精简：控制面负责编译与签名配置；数据面执行固定管线，外部状态只用于
-协调与持久化异步尾路径。实线表示同步路径，虚线表示控制、特定部署形态或异步路径。
+该图有意保持精简：控制面负责编译配置，并在 Standard/Enterprise 中签名（Lite 可使用
+本地快照或 checksum）；数据面执行固定管线，外部状态只用于协调与持久化异步尾路径。
+Usage 在启用时经过 Accounting Spool；Audit 与 Domain Event 走 DB 路径。实线表示
+同步路径，虚线表示控制、特定部署形态或异步路径。
 
 ### 固定七阶段
 
