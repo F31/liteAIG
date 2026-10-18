@@ -125,86 +125,47 @@ profiles, not different architectures.**
 
 ```mermaid
 flowchart TB
-  subgraph EDGE["Ingress / Edge"]
-    C["Clients: OpenAI SDK · Anthropic SDK · MCP · A2A"]
-    FP["Optional front proxy: TLS · WAF · L7"]
+  subgraph EDGE["Ingress"]
+    C["Clients<br/>OpenAI SDK · Anthropic SDK · MCP · A2A"]
+    FP["Optional TLS / WAF / L7 proxy"]
   end
 
-  subgraph DP["Data Plane — Lite: one process · Standard: N replicas"]
+  subgraph CP["Control Plane — optional split"]
+    UI["Embedded Console / Admin API"]
+    CFG["Config Compiler / Validator"]
+    SIGN["Bundle Signer"]
+  end
+
+  subgraph DP["Data Plane — Lite: 1 process · Standard: N replicas"]
     AD["Protocol Adapters<br/>OpenAI | Anthropic | MCP | A2A"]
-
-    subgraph KERNEL["Governance Microkernel"]
-      SNAP["Immutable Tenant Snapshot"]
-      PIPE["Fixed 7-Stage Pipeline"]
-      PORTS["Controlled Extension Ports<br/>auth · guardrail · cache · routing · budget · execution · accounting · telemetry"]
-    end
-
-    COMP["Governed Components<br/>Admission · Guardrail · Cache · Resolution/Budget<br/>Execution · Accounting · Audit/Telemetry"]
+    PIPE["Fixed 7-Stage Pipeline<br/>Admission → Guardrail → Cache → Resolution<br/>→ Execution → Output Guardrail → Accounting"]
     CONN["Connectors<br/>Model · MCP Tool · A2A Agent"]
-    EXT["External Guardrail<br/>(optional)"]
-    EGR["Egress Policy + Secret Resolver"]
   end
 
-  subgraph CTL["Control Plane — optional split, never on the hot path"]
-    UI["Embedded Console"]
-    API["Admin API"]
-    CMP["Config Compiler / Validator"]
-    SIG["Bundle Signer"]
-    IDP["Local Auth / OIDC"]
+  subgraph STATE["State & Operations"]
+    DB[(SQLite / PostgreSQL<br/>RLS + tenant pools)]
+    RD[(Redis — Standard<br/>budget · leases · cache)]
+    SPOOL[(Accounting Spool / Outbox)]
+    OBS["OTLP · Prometheus · ClickHouse"]
   end
 
-  subgraph STATE["State & Coordination"]
-    DB[("SQLite / PostgreSQL<br/>RLS + tenant pools")]
-    RD[("Redis — Standard<br/>budget · leases · exact cache")]
-    BUN["Signed RuntimeBundle + LKG"]
-    SPL["Accounting Spool"]
-    OUT["Event / A2A Outbox"]
-  end
+  C --> FP --> AD --> PIPE --> CONN
+  CONN --> UP["Model / Tool / Agent Providers"]
 
-  subgraph OPS["Observability & Operations"]
-    OTLP["OTLP"]
-    PROM["Prometheus"]
-    CH["ClickHouse"]
-    ALERT["Webhook / Email"]
-    RUN["Health · Drain · Backup / DR"]
-  end
+  UI --> CFG --> SIGN
+  SIGN -.->|Signed RuntimeBundle + LKG| PIPE
+  CFG --> DB
 
-  C --> FP
-  FP --> AD
-  AD --> PIPE
-  PIPE --> COMP
-  COMP -->|resolution / execution| CONN
-  CONN --> EGR
-  COMP -.->|optional| EXT
-  EXT --> EGR
-  SNAP -.->|feeds| PIPE
-  PORTS -.->|implemented by| COMP
-
-  UI --> API
-  API --> CMP
-  API --> IDP
-  CMP --> SIG
-  SIG --> BUN
-  BUN -.->|pull / atomic activate| SNAP
-  CMP --> DB
-
-  COMP -.->|accounting / audit| SPL
-  SPL --> DB
-  COMP -.->|events| OUT
-  OUT --> DB
-  PIPE -.->|Standard only| RD
-  RD -.->|Standard only| PIPE
-
-  COMP -.->|async telemetry| OTLP
-  COMP -.->|async telemetry| PROM
-  COMP -.->|async telemetry| CH
-  COMP -.->|async telemetry| ALERT
-  RUN -.-> PIPE
+  PIPE <-->|Standard only| RD
+  PIPE -.->|usage / audit| SPOOL
+  SPOOL --> DB
+  PIPE -.->|async telemetry| OBS
 ```
 
-Solid edges are synchronous request/control paths; dotted edges are
-asynchronous or deployment-specific. The diagram is a logical view: Lite runs
-the same components in one process.
+The diagram is intentionally compact. The control plane compiles and signs
+configuration; the data plane executes the fixed pipeline and uses external
+state only for coordination and the durable asynchronous tail. Solid edges are
+synchronous; dotted edges are control, deployment-specific, or asynchronous.
 
 ### Fixed seven-stage pipeline
 

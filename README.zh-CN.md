@@ -113,85 +113,45 @@ LiteAIG 是一个**固定管线微内核**。微内核只负责 Canonical Intera
 
 ```mermaid
 flowchart TB
-  subgraph EDGE["Ingress / Edge"]
-    C["客户端: OpenAI SDK · Anthropic SDK · MCP · A2A"]
-    FP["可选前置代理: TLS · WAF · L7"]
+  subgraph EDGE["Ingress"]
+    C["客户端<br/>OpenAI SDK · Anthropic SDK · MCP · A2A"]
+    FP["可选 TLS / WAF / L7 代理"]
   end
 
-  subgraph DP["Data Plane — Lite: 单进程 · Standard: N 副本"]
+  subgraph CP["控制面 — 可选拆分"]
+    UI["内嵌 Console / Admin API"]
+    CFG["Config Compiler / Validator"]
+    SIGN["Bundle Signer"]
+  end
+
+  subgraph DP["数据面 — Lite: 单进程 · Standard: N 副本"]
     AD["协议适配器<br/>OpenAI | Anthropic | MCP | A2A"]
-
-    subgraph KERNEL["治理微内核"]
-      SNAP["不可变租户快照"]
-      PIPE["固定七阶段管线"]
-      PORTS["受控扩展端口<br/>auth · guardrail · cache · routing · budget · execution · accounting · telemetry"]
-    end
-
-    COMP["治理组件<br/>Admission · Guardrail · Cache · Resolution/Budget<br/>Execution · Accounting · Audit/Telemetry"]
+    PIPE["固定七阶段管线<br/>Admission → Guardrail → Cache → Resolution<br/>→ Execution → Output Guardrail → Accounting"]
     CONN["连接器<br/>Model · MCP Tool · A2A Agent"]
-    EXT["外部护栏<br/>(optional)"]
-    EGR["Egress Policy + Secret Resolver"]
   end
 
-  subgraph CTL["控制面 — 可选拆分，绝不在热路径"]
-    UI["内嵌 Console"]
-    API["Admin API"]
-    CMP["Config Compiler / Validator"]
-    SIG["Bundle Signer"]
-    IDP["Local Auth / OIDC"]
+  subgraph STATE["状态与运维"]
+    DB[(SQLite / PostgreSQL<br/>RLS + 租户连接池)]
+    RD[(Redis — Standard<br/>budget · leases · cache)]
+    SPOOL[(Accounting Spool / Outbox)]
+    OBS["OTLP · Prometheus · ClickHouse"]
   end
 
-  subgraph STATE["状态与协调"]
-    DB[("SQLite / PostgreSQL<br/>RLS + 租户连接池")]
-    RD[("Redis — Standard<br/>budget · leases · exact cache")]
-    BUN["签名 RuntimeBundle + LKG"]
-    SPL["Accounting Spool"]
-    OUT["Event / A2A Outbox"]
-  end
+  C --> FP --> AD --> PIPE --> CONN
+  CONN --> UP["Model / Tool / Agent Providers"]
 
-  subgraph OPS["可观测性与运维"]
-    OTLP["OTLP"]
-    PROM["Prometheus"]
-    CH["ClickHouse"]
-    ALERT["Webhook / Email"]
-    RUN["Health · Drain · Backup / DR"]
-  end
+  UI --> CFG --> SIGN
+  SIGN -.->|Signed RuntimeBundle + LKG| PIPE
+  CFG --> DB
 
-  C --> FP
-  FP --> AD
-  AD --> PIPE
-  PIPE --> COMP
-  COMP -->|resolution / execution| CONN
-  CONN --> EGR
-  COMP -.->|optional| EXT
-  EXT --> EGR
-  SNAP -.->|feeds| PIPE
-  PORTS -.->|implemented by| COMP
-
-  UI --> API
-  API --> CMP
-  API --> IDP
-  CMP --> SIG
-  SIG --> BUN
-  BUN -.->|pull / atomic activate| SNAP
-  CMP --> DB
-
-  COMP -.->|accounting / audit| SPL
-  SPL --> DB
-  COMP -.->|events| OUT
-  OUT --> DB
-  PIPE -.->|Standard only| RD
-  RD -.->|Standard only| PIPE
-
-  COMP -.->|async telemetry| OTLP
-  COMP -.->|async telemetry| PROM
-  COMP -.->|async telemetry| CH
-  COMP -.->|async telemetry| ALERT
-  RUN -.-> PIPE
+  PIPE <-->|Standard only| RD
+  PIPE -.->|usage / audit| SPOOL
+  SPOOL --> DB
+  PIPE -.->|async telemetry| OBS
 ```
 
-实线是同步请求/控制路径，虚线是异步或特定部署形态。该图是逻辑视图：
-Lite 在同一进程中运行相同组件。
+该图有意保持精简：控制面负责编译与签名配置；数据面执行固定管线，外部状态只用于
+协调与持久化异步尾路径。实线表示同步路径，虚线表示控制、特定部署形态或异步路径。
 
 ### 固定七阶段
 
