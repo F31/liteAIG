@@ -621,7 +621,7 @@ func (b *ControlBackend) Simulate(ctx context.Context, scope tenancy.TenantScope
 	for id, metric := range input.Metrics {
 		metrics[id] = routing.DeploymentMetrics{LatencyMS: metric.LatencyMS, Cost: metric.Cost, Load: metric.Load, CacheAffinity: metric.CacheAffinity}
 	}
-	plan, err := (&routing.Planner{}).Plan(routing.Input{Snapshot: snapshot, LogicalModel: input.Model, ProjectID: input.ProjectID, RequestID: "simulator", Metrics: metrics})
+	plan, err := (&routing.Planner{}).Plan(routing.Input{Snapshot: snapshot, LogicalModel: input.Model, ProjectID: input.ProjectID, RequestID: "simulator", RequiredCapabilities: config.CanonicalCapabilities(input.RequiredCapabilities), RequiresTools: input.RequiresTools, Metrics: metrics})
 	if err != nil {
 		return SimulateResult{}, err
 	}
@@ -733,6 +733,16 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 	if b.accounting == nil {
 		return FinOpsView{}, errNotWired
 	}
+	// Build a project name lookup so the UI can show human-readable names
+	// instead of opaque IDs.
+	projectNames := map[string]string{}
+	if b.listProjects != nil {
+		if projects, err := b.listProjects(ctx, scope); err == nil {
+			for _, p := range projects {
+				projectNames[p.ID] = p.Name
+			}
+		}
+	}
 	requests, err := b.accounting.ListRequests(ctx, scope, 500)
 	if err != nil {
 		return FinOpsView{}, err
@@ -783,7 +793,7 @@ func (b *ControlBackend) FinOps(ctx context.Context, scope tenancy.TenantScope) 
 		}
 		project, ok := projects[projectID]
 		if !ok {
-			project = &FinOpsProjectRow{ProjectID: projectID}
+			project = &FinOpsProjectRow{ProjectID: projectID, ProjectName: projectNames[projectID]}
 			projects[projectID] = project
 			projectOrder = append(projectOrder, projectID)
 		}
@@ -909,16 +919,22 @@ func (b *ControlBackend) Recommendations(ctx context.Context, scope tenancy.Tena
 func finopsRecommendations(view FinOpsView) []FinOpsRecommendation {
 	var items []FinOpsRecommendation
 	if view.RetryCost+view.FallbackCost > 0 {
-		items = append(items, FinOpsRecommendation{Kind: "routing", Title: "Review retry and fallback costs", Detail: "Retries or fallback attempts are adding provider spend. Check provider health and route ordering.", Impact: view.RetryCost + view.FallbackCost})
+		items = append(items, FinOpsRecommendation{Kind: "routing", Title: "Review retry and fallback costs", Detail: "Retries or fallback attempts are adding provider spend. Check provider health and route ordering.", Impact: view.RetryCost + view.FallbackCost, DetailKey: "routing", DetailParams: nil})
 	}
 	if view.CacheHits+view.SemanticHits > 0 {
-		items = append(items, FinOpsRecommendation{Kind: "cache", Title: "Cache is avoiding duplicate provider calls", Detail: fmt.Sprintf("Cache hits avoided ~%d provider tokens; %d were priced at %s reference rates for an estimated %s avoided cost (%d unpriced). This is not provider billing.", view.SavedTokens, view.PricedSavedTokens, view.EstimateVersion, moneyText(view.CacheSavings), view.UnpricedSavedTokens), Impact: view.CacheSavings})
+		detail := fmt.Sprintf("Cache hits avoided ~%d provider tokens; %d were priced at %s reference rates for an estimated %s avoided cost (%d unpriced). This is not provider billing.", view.SavedTokens, view.PricedSavedTokens, view.EstimateVersion, moneyText(view.CacheSavings), view.UnpricedSavedTokens)
+		items = append(items, FinOpsRecommendation{Kind: "cache", Title: "Cache is avoiding duplicate provider calls", Detail: detail, Impact: view.CacheSavings, DetailKey: "cache", DetailParams: map[string]any{"tokens": view.SavedTokens, "priced": view.PricedSavedTokens, "version": view.EstimateVersion, "savings": fmt.Sprintf("%.4f", view.CacheSavings), "unpriced": view.UnpricedSavedTokens}})
 	}
 	if len(view.ByProject) > 0 && view.ByProject[0].Spend > 0 {
-		items = append(items, FinOpsRecommendation{Kind: "attribution", Title: "Top project drives current spend", Detail: fmt.Sprintf("Project %s accounts for %.4f provider spend in the recent ledger window.", view.ByProject[0].ProjectID, view.ByProject[0].Spend), Impact: view.ByProject[0].Spend})
+		projectLabel := view.ByProject[0].ProjectID
+		if view.ByProject[0].ProjectName != "" {
+			projectLabel = view.ByProject[0].ProjectName
+		}
+		detail := fmt.Sprintf("Project %s accounts for %.4f provider spend in the recent ledger window.", projectLabel, view.ByProject[0].Spend)
+		items = append(items, FinOpsRecommendation{Kind: "attribution", Title: "Top project drives current spend", Detail: detail, Impact: view.ByProject[0].Spend, DetailKey: "attribution", DetailParams: map[string]any{"project": projectLabel, "spend": fmt.Sprintf("%.4f", view.ByProject[0].Spend)}})
 	}
 	if len(items) == 0 {
-		items = append(items, FinOpsRecommendation{Kind: "baseline", Title: "No optimization signals yet", Detail: "Recent usage has no retry/fallback overhead or cache activity to act on."})
+		items = append(items, FinOpsRecommendation{Kind: "baseline", Title: "No optimization signals yet", Detail: "Recent usage has no retry/fallback overhead or cache activity to act on.", DetailKey: "baseline", DetailParams: nil})
 	}
 	return items
 }
@@ -1331,7 +1347,7 @@ func buildRuntimeResources(snapshot *runtime.TenantRuntimeSnapshot) RuntimeResou
 		view.Credentials = append(view.Credentials, CredentialResource{ID: credential.ID, ProviderID: credential.ProviderID, Status: credential.Status})
 	}
 	for _, deployment := range snapshot.Deployments() {
-		view.Deployments = append(view.Deployments, DeploymentResource{ID: deployment.ID, ProviderID: deployment.ProviderID, Model: deployment.UpstreamModel, Region: deployment.DataRegion, Status: deployment.Status})
+		view.Deployments = append(view.Deployments, DeploymentResource{ID: deployment.ID, ProviderID: deployment.ProviderID, Model: deployment.UpstreamModel, Region: deployment.DataRegion, Status: deployment.Status, Capabilities: deployment.Capabilities, ContextWindow: deployment.ContextWindow})
 	}
 	for _, model := range snapshot.LogicalModels() {
 		view.LogicalModels = append(view.LogicalModels, LogicalModelResource{ID: model.ID, Alias: model.Alias, RoutePolicyID: model.RoutePolicyID})

@@ -147,6 +147,13 @@ React + antd 的单页控制台（中英双语），覆盖 Setup、Dashboard、R
 - 流式增量帧编码（SSE）；
 - 严格 JSON-RPC 2.0 校验（错误码 -32700/-32600/-32601/-32602）。
 
+辅助调用边界（需明确知晓）：
+
+- 语义缓存的 embedding 调用与 LLM-as-Judge 使用租户 Provider 和统一 egress 策略。
+- 它们会按父请求的 Tenant/Project/Key 预算策略单独预留并对账，并写入带
+  `parent_request_id` 的辅助 usage 记录；不计入父请求的 TPM 预留，但仍可在
+  FinOps 中按 `auxiliary_embedding` / `auxiliary_judge` 来源查看。
+
 管线关键机制：
 
 - **流式护栏三级模型**（Inline / Buffered / Shadow）在 `streamCollector` 中实时执行，注入内容在首个违规 chunk 即被切断，泄漏窗口有界。
@@ -177,9 +184,24 @@ React + antd 的单页控制台（中英双语），覆盖 Setup、Dashboard、R
 - **拨号时逐地址校验**（防 DNS Rebinding）；
 - 拒绝重定向链、响应体封顶；Webhook 目标禁 userinfo。
 
-### 5.4 数据面 RLS（Postgres）
+### 5.4 数据面 RLS（Postgres，默认启用）
 
-Standard 档在 Postgres 上启用**行级安全（RLS）**作为第二道防线：租户隔离策略覆盖全部租户级表，受控平台角色 BYPASSRLS 仅用于运维。
+Standard 档在 Postgres 上默认启用 RLS，作为 Repository tenant scope 之外的
+第二道防线：
+
+- 数据面请求从 `RequestContext` 注入 tenant，仓储层通过 `TenantRouter`
+  选择该租户的连接池；
+- 每个租户池以受限角色 `liteaig_app` 连接，并在建连时设置
+  `app.tenant_id`；
+- 控制面/后台任务没有 tenant 上下文时使用平台连接（表 owner /
+  `liteaig_platform`），用于跨租户运维；
+- 租户连接池按 LRU 懒加载并有数量上限（`--postgres-tenant-pools`，默认 16，
+  每池最多 2 条连接），避免按租户数无限放大 Postgres 连接；
+- 租户 Admin API 在 `requireAuth` 后注入 tenant，因此同样受 RLS 约束；
+- `--postgres-rls=false` 仅用于受控回滚，会退化为 Repository scope 单层隔离。
+
+数据库用户需要具备创建/授权 `liteaig_app`、`liteaig_platform` 角色的权限
+（通常为数据库 owner 或具备 CREATEROLE/GRANT 的运维角色）。
 
 ### 5.5 零信任联邦
 
@@ -242,7 +264,7 @@ Standard 档在 Postgres 上启用**行级安全（RLS）**作为第二道防线
 ### 7.2 Standard（多副本 split-plane）
 
 - **分体模式**：`--mode=all | gateway | control`；
-- Gateway 多副本共享 Postgres + Redis 协调（预算账本、并发租约、在途计数）；
+- Gateway 多副本共享 Postgres + Redis 协调（预算账本、并发租约、在途计数、RPM/TPM 与精确缓存）；语义缓存索引目前仍是进程内状态；
 - 控制面签名 RuntimeBundle，网关认证拉取并原子激活；
 - `coordination_leases` 为单例任务（sweeper、push outbox 等）提供跨进程互斥与陈旧接管；
 - 双网关进程 + Postgres/Redis 的 exactly-once 投递已有进程级黑盒验证。
@@ -279,7 +301,7 @@ Standard 档在 Postgres 上启用**行级安全（RLS）**作为第二道防线
 5. **记账 Spool 与预算账本**：记账与请求热路径解耦（不阻塞请求、不丢账），预算支持 regional/global_soft/global_hard 一致性与故障档位语义，是 FinOps 类网关里少见的「预留-结算-释放」闭环。
 6. **LKG + 签名 RuntimeBundle + 原子激活**：配置同步故障不中断数据面；网关回退到最近已知良好版本，控制面/数据面解耦可靠。
 7. **单二进制 + distroless nonroot + 双档位同路径**：Lite 到 Standard 是装配差异而非产品分叉，边缘到生产同一产物，降低运维心智与供应链风险。
-8. **零框架 HTTP 微内核 + 内建安全原语**：WebKit 微内核（纯标准库）、统一 egress SSRF 策略（防 DNS Rebinding）、RLS 第二道防线、密钥全加密落库，安全能力内建而非外挂。
+8. **零框架 HTTP 微内核 + 内建安全原语**：WebKit 微内核（纯标准库）、统一 egress SSRF 策略（防 DNS Rebinding）、Repository tenant scope + Postgres RLS（tenant-scoped pool）、密钥全加密落库，安全能力内建而非外挂。
 9. **质量门禁工程化**：govulncheck / npm audit / kubeconform / 官方 SDK conformance / dry-run 发布，把安全与兼容性检验自动化到每次提交。
 
 ---

@@ -221,3 +221,48 @@ func TestLiteMetricsEndpointGracefulScrapeError(t *testing.T) {
 		t.Fatalf("expected scrape_error 1, body:\n%s", rec.Body.String())
 	}
 }
+
+func TestProcessMetricsExposeProviderHistograms(t *testing.T) {
+	processMetrics.Lock()
+	processMetrics.requests = map[processMetricKey]uint64{}
+	processMetrics.latency = map[processMetricKey]*processHistogram{}
+	processMetrics.ttft = map[processMetricKey]*processHistogram{}
+	processMetrics.Unlock()
+
+	recordProcessMetrics("provider-a", "success", 120*time.Millisecond, 30*time.Millisecond)
+	var body strings.Builder
+	writeProcessMetrics(func(format string, args ...any) {
+		fmt.Fprintf(&body, format, args...)
+	})
+	metrics := body.String()
+	for _, sample := range []string{
+		`liteaig_provider_requests_total{provider="provider-a",outcome="success"} 1`,
+		`liteaig_provider_request_duration_seconds_count{provider="provider-a",outcome="success"} 1`,
+		`liteaig_provider_ttft_seconds_count{provider="provider-a",outcome="success"} 1`,
+	} {
+		if !strings.Contains(metrics, sample) {
+			t.Fatalf("missing %q in:\n%s", sample, metrics)
+		}
+	}
+}
+
+func TestAuxiliaryMetricsExposeExplicitExemption(t *testing.T) {
+	auxiliaryMetrics.Lock()
+	auxiliaryMetrics.calls = map[auxiliaryMetricKey]uint64{}
+	auxiliaryMetrics.tokens = map[auxiliaryMetricKey]uint64{}
+	auxiliaryMetrics.Unlock()
+	recordAuxiliaryCall("embedding", "success", 7)
+	var body strings.Builder
+	writeAuxiliaryMetrics(func(format string, args ...any) {
+		fmt.Fprintf(&body, format, args...)
+	})
+	metrics := body.String()
+	for _, sample := range []string{
+		`liteaig_auxiliary_calls_total{kind="embedding",outcome="success"} 1`,
+		`liteaig_auxiliary_tokens_total{kind="embedding",outcome="success"} 7`,
+	} {
+		if !strings.Contains(metrics, sample) {
+			t.Fatalf("missing %q in:\n%s", sample, metrics)
+		}
+	}
+}

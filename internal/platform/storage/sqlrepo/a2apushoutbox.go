@@ -12,7 +12,7 @@ import (
 
 // A2APushOutboxStore persists signed A2A push callbacks until delivery or a
 // bounded retry budget is exhausted.
-type A2APushOutboxStore struct{ db *sql.DB }
+type A2APushOutboxStore struct{ db DBTX }
 
 const a2aPushClaimTimeout = 5 * time.Minute
 
@@ -37,7 +37,7 @@ type A2APushOutboxFailure struct {
 	UpdatedAt     time.Time
 }
 
-func NewA2APushOutboxStore(db *sql.DB) *A2APushOutboxStore {
+func NewA2APushOutboxStore(db DBTX) *A2APushOutboxStore {
 	return &A2APushOutboxStore{db: db}
 }
 

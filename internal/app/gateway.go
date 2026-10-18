@@ -28,7 +28,8 @@ import (
 	"github.com/F31/liteAIG/internal/tenancy"
 )
 
-// gatewayMaxBodyBytes bounds inbound data-plane request bodies.
+// gatewayMaxBodyBytes is the default bound for inbound data-plane request
+// bodies. Operators can raise it (audio/vision/files) via LiteOptions.
 const gatewayMaxBodyBytes = 1 << 20
 
 // liteGatewayCore implements the data-plane governance surface for the gateway
@@ -43,6 +44,7 @@ type liteGatewayCore struct {
 	a2aTasks      *sqlrepo.A2ATaskStore
 	connectors    *connectorCache
 	secrets       a2aconnector.SecretResolver
+	maxBodyBytes  int64
 
 	// inboundFederated is the pluggable federated-identity seam. When wired,
 	// an inbound /a2a request that carries trusted-proxy federated transport
@@ -62,8 +64,11 @@ type inboundFederatedAuth struct {
 	snapshotFor func(context.Context, string) (*runtime.TenantRuntimeSnapshot, error)
 }
 
-func newLiteGatewayCore(admissionService *admission.Service, pipeline *litePipeline, authenticator *auth.APIKeyAuthenticator, toolCalls *sqlrepo.ToolCallStore, a2aTasks *sqlrepo.A2ATaskStore, httpClient *http.Client, secrets a2aconnector.SecretResolver, federated *inboundFederatedAuth) *liteGatewayCore {
-	return &liteGatewayCore{admission: admissionService, pipeline: pipeline, authenticator: authenticator, http: httpClient, toolCalls: toolCalls, a2aTasks: a2aTasks, connectors: newConnectorCache(), secrets: secrets, inboundFederated: federated}
+func newLiteGatewayCore(admissionService *admission.Service, pipeline *litePipeline, authenticator *auth.APIKeyAuthenticator, toolCalls *sqlrepo.ToolCallStore, a2aTasks *sqlrepo.A2ATaskStore, httpClient *http.Client, secrets a2aconnector.SecretResolver, federated *inboundFederatedAuth, maxBodyBytes int64) *liteGatewayCore {
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = gatewayMaxBodyBytes
+	}
+	return &liteGatewayCore{admission: admissionService, pipeline: pipeline, authenticator: authenticator, http: httpClient, toolCalls: toolCalls, a2aTasks: a2aTasks, connectors: newConnectorCache(), secrets: secrets, inboundFederated: federated, maxBodyBytes: maxBodyBytes}
 }
 
 // connectorCache reuses the stateless MCP/A2A connectors per base URL so each
@@ -223,7 +228,7 @@ func (c *liteGatewayCore) toolStreamA2A(ctx context.Context, input gatewayserver
 		authResult, err = c.federatedAuthResult(ctx, input)
 	} else {
 		authResult, err = c.authenticator.Authenticate(ctx, input.Token, auth.RequestScope{RemoteIP: input.RemoteIP})
-		if err == nil && (input.BodyBytes < 0 || input.BodyBytes > gatewayMaxBodyBytes) {
+		if err == nil && (input.BodyBytes < 0 || input.BodyBytes > c.maxBodyBytes) {
 			err = &kernelerrors.Error{Code: "REQUEST_TOO_LARGE", Message: "request body exceeds configured limit"}
 		}
 		if err != nil {
@@ -244,7 +249,7 @@ func (c *liteGatewayCore) tool(ctx context.Context, input gatewayserver.AdmitInp
 	if err != nil {
 		return nil, &kernelerrors.Error{Code: "UNAUTHORIZED", Message: "invalid credentials"}
 	}
-	if input.BodyBytes < 0 || input.BodyBytes > gatewayMaxBodyBytes {
+	if input.BodyBytes < 0 || input.BodyBytes > c.maxBodyBytes {
 		return nil, &kernelerrors.Error{Code: "REQUEST_TOO_LARGE", Message: "request body exceeds configured limit"}
 	}
 	if input.Protocol == "a2a" {
@@ -350,7 +355,7 @@ func (c *liteGatewayCore) federatedAuthResult(ctx context.Context, input gateway
 	if input.Protocol != "a2a" {
 		return nil, &kernelerrors.Error{Code: "UNAUTHORIZED", Message: "federated transport is not accepted on this path"}
 	}
-	if input.BodyBytes < 0 || input.BodyBytes > gatewayMaxBodyBytes {
+	if input.BodyBytes < 0 || input.BodyBytes > c.maxBodyBytes {
 		return nil, &kernelerrors.Error{Code: "REQUEST_TOO_LARGE", Message: "request body exceeds configured limit"}
 	}
 	scopes, err := c.inboundFederated.tenants(ctx)
@@ -417,6 +422,7 @@ func (c *liteGatewayCore) invokeA2AStream(ctx context.Context, authResult *auth.
 // forwarded to the sink before the stream completes. Both paths share the same
 // admission, durable task/idempotency handling, and accounting.
 func (c *liteGatewayCore) invokeA2ARelay(ctx context.Context, authResult *auth.Result, input gatewayserver.AdmitInput, sink contracts.StreamWriter) (*interaction.UnifiedResponse, error) {
+	ctx = tenancy.WithTenant(ctx, authResult.Principal.TenantID)
 	if input.Request == nil || input.Request.Chat == nil {
 		return nil, &kernelerrors.Error{Code: "INVALID_REQUEST", Message: "A2A chat message is required"}
 	}

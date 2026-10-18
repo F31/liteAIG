@@ -51,6 +51,16 @@ type Result struct {
 	Attempts     []Attempt
 	DeploymentID string
 }
+
+// firstTokenTimeoutError marks a streaming attempt that produced no first byte
+// within the first-token deadline. It is retryable, but the stalled deployment
+// must not be retried before the plan fails over.
+type firstTokenTimeoutError struct{ timeout time.Duration }
+
+func (e *firstTokenTimeoutError) Error() string {
+	return "stream first token timeout after " + e.timeout.String()
+}
+
 type Executor struct {
 	policy   retry.Policy
 	resolver Resolver
@@ -93,6 +103,17 @@ func (e *Executor) WithLeases(leases LeaseGate) *Executor {
 	return e
 }
 
+// WithPolicy returns a shallow executor clone using a different resilience
+// policy. The resolver, circuit, leases and inflight counter stay shared.
+func (e *Executor) WithPolicy(policy retry.Policy) *Executor {
+	if e == nil {
+		return nil
+	}
+	clone := *e
+	clone.policy = policy
+	return &clone
+}
+
 // WithInflight attaches a shared inflight counter used to feed quota-aware
 // credential selection (least_inflight / quota_aware) across processes.
 func (e *Executor) WithInflight(inflight InflightCounter) *Executor {
@@ -109,7 +130,7 @@ type attemptCall func(totalCtx context.Context, invoker contracts.InteractionInv
 // LEASE_BUSY / exhausted classification. Execute and ExecuteStream differ
 // only in the call step, so both delegate here.
 func (e *Executor) runPlan(ctx context.Context, plan *routing.RoutePlan, snapshot *runtime.TenantRuntimeSnapshot, request *interaction.UnifiedRequest, call attemptCall, stopOnCommitted bool) ([]Attempt, *interaction.UnifiedResponse, string, error) {
-	totalCtx, cancel := context.WithTimeout(ctx, e.policy.TotalTimeout)
+	totalCtx, cancel := e.totalContext(ctx, stopOnCommitted)
 	defer cancel()
 	var attempts []Attempt
 	var last error
@@ -149,14 +170,26 @@ func (e *Executor) runPlan(ctx context.Context, plan *routing.RoutePlan, snapsho
 				return attempts, response, deployment.ID, nil
 			}
 			normalized := invoker.NormalizeError(err)
+			var firstToken *firstTokenTimeoutError
+			isFirstToken := errors.As(err, &firstToken)
+			outcome, retryable := normalized.Code, normalized.Retryable
+			if isFirstToken {
+				outcome, retryable = "first_token_timeout", true
+			}
 			last = err
-			attempts = append(attempts, Attempt{DeploymentID: deployment.ID, CredentialID: deployment.CredentialID, Number: attempt, Outcome: normalized.Code, Retryable: normalized.Retryable})
+			attempts = append(attempts, Attempt{DeploymentID: deployment.ID, CredentialID: deployment.CredentialID, Number: attempt, Outcome: outcome, Retryable: retryable})
 			// Record the failure before any early return: a half-open probe
 			// that fails with a non-retryable error must still be observed, or
 			// the breaker stays half-open forever and the deployment is
 			// excluded from routing permanently.
 			if e.circuit != nil {
 				e.circuit.Record(deployment.ID, deployment.CredentialID, false)
+			}
+			if isFirstToken {
+				// A pre-commit first-token stall is invisible to the client, so
+				// fail over to the next deployment immediately instead of
+				// burning retries on the same stalled one.
+				break
 			}
 			if (stopOnCommitted && committed) || !normalized.Retryable {
 				return attempts, nil, "", err
@@ -176,6 +209,20 @@ func (e *Executor) runPlan(ctx context.Context, plan *routing.RoutePlan, snapsho
 		}
 	}
 	return attempts, nil, "", last
+}
+
+// totalContext applies the policy's overall deadline. Streams use
+// StreamTotalTimeout, where zero means "no overall deadline" and the per-chunk
+// idle timer remains the liveness bound.
+func (e *Executor) totalContext(ctx context.Context, stream bool) (context.Context, context.CancelFunc) {
+	timeout := e.policy.TotalTimeout
+	if stream {
+		timeout = e.policy.StreamTotalTimeout
+	}
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // boundedCall invokes the deployment with a per-attempt timeout.
@@ -353,34 +400,62 @@ func (e *Executor) trackInflight(snapshot *runtime.TenantRuntimeSnapshot, deploy
 }
 
 func (e *Executor) streamAttempt(ctx context.Context, invoker contracts.InteractionInvoker, deployment runtime.Deployment, request *interaction.UnifiedRequest, writer contracts.StreamWriter) (bool, error) {
-	attemptCtx, cancel := context.WithTimeout(ctx, e.policy.AttemptTimeout)
+	// A healthy stream may run far longer than a non-streaming completion.
+	// There is deliberately no per-attempt or total deadline here; the
+	// first-token and idle timers below are the liveness bounds.
+	attemptCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	tracking := &trackingWriter{target: writer, activity: make(chan struct{}, 1)}
 	result := make(chan error, 1)
 	go func() {
 		result <- invoker.Stream(attemptCtx, contracts.InvocationRequest{Target: contracts.TargetRef{Kind: "model", ID: deployment.ID}, Request: request}, tracking)
 	}()
-	timer := time.NewTimer(e.policy.StreamIdleTimeout)
-	defer timer.Stop()
+	// Before the first token the attempt may still fail over invisibly, so a
+	// first-token deadline applies. Once the first chunk commits, switch to
+	// the idle deadline (which bounds gaps between chunks).
+	firstTokenTimeout := e.policy.FirstTokenTimeout
+	if firstTokenTimeout <= 0 || (e.policy.StreamIdleTimeout > 0 && firstTokenTimeout > e.policy.StreamIdleTimeout) {
+		// Never wait longer for the first byte than for an inter-chunk gap.
+		firstTokenTimeout = e.policy.StreamIdleTimeout
+	}
+	firstToken := true
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	if firstTokenTimeout > 0 {
+		timer = time.NewTimer(firstTokenTimeout)
+		timerC = timer.C
+		defer timer.Stop()
+	}
 	for {
 		select {
 		case err := <-result:
 			return tracking.committed.Load(), err
 		case <-tracking.activity:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
+			firstToken = false
+			if timer != nil {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				if e.policy.StreamIdleTimeout > 0 {
+					timer.Reset(e.policy.StreamIdleTimeout)
+					timerC = timer.C
+				} else {
+					timerC = nil
 				}
 			}
-			timer.Reset(e.policy.StreamIdleTimeout)
-		case <-timer.C:
+		case <-timerC:
 			cancel()
-			err := <-result
-			if err == nil {
-				err = context.DeadlineExceeded
+			<-result
+			if tracking.committed.Load() {
+				return true, context.DeadlineExceeded
 			}
-			return tracking.committed.Load(), err
+			if firstToken {
+				return false, &firstTokenTimeoutError{timeout: firstTokenTimeout}
+			}
+			return false, context.DeadlineExceeded
 		case <-ctx.Done():
 			cancel()
 			return tracking.committed.Load(), ctx.Err()

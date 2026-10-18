@@ -1031,9 +1031,21 @@ Agentic Protocol：
 
 - image generation
 - audio
+  - OpenAI `/v1/audio/transcriptions`（音频→文本，capability `audio`）
+  - OpenAI `/v1/audio/translations`（音频→英文文本，capability `audio`）
+  - OpenAI `/v1/audio/speech`（文本→音频，capability `speech`，返回原始音频字节）
+  - 三种操作共享 `RequestAudio` 与 `AudioPayload.Operation`；路由硬约束按 operation 匹配 `audio`/`speech`；语音 RTC/Realtime 明确不在范围内
 - rerank
 - batch
 - Gemini-native compatibility
+
+模型能力标签（模型类型区分）：
+
+- 规范词汇（`internal/controlplane/config/capabilities.go`，Console 同源）：`chat`(文本)、`vision`、`reasoning`、`tools`、`embedding`、`rerank`、`audio`(STT)、`speech`(TTS)；
+- Deployment 声明能力，编译时做规范化（别名如 `embeddings`→`embedding`、`tts`→`speech`、`multimodal`→`vision`）与去重；
+- 路由硬约束：图片请求必须命中 `vision`（否则文本模型会被误选）；`audio`/`speech`/`rerank`/`batch`/`tools` 同样强制；无能力声明的 Deployment 不受约束；
+- `/api/admin/runtime` 回传 Deployment 的 `capabilities` 与 `contextWindow`，Console 以彩色 Tag 区分文本/视觉/语音等类型；
+- 安装向导优先按所选模型在 `resource_model_catalog` 中的能力/上下文窗口建立 Deployment（同 provider 优先匹配），目录缺失时才回退到 `InferCapabilities` 名称推断；管理员可在 Console 覆盖。
 
 ## 5.2 Unified Request
 
@@ -1549,6 +1561,14 @@ base=200ms, cap=4s
 ```
 
 流式请求在首 chunk 已提交客户端后禁止完整自动 Retry。
+
+首 Token 故障转移（实现）：
+
+- 首字节提交前，`streamAttempt` 使用独立的 `FirstTokenTimeout`（默认 3s，且不超过 stream idle timeout）；
+- 首个 chunk 到达即切换到 stream idle timeout，并标记 committed，此后不再允许切换；
+- 首 Token 超时归类为 `first_token_timeout`，直接跳到下一个 Deployment，不在同一 Deployment 上重试；
+- 由于切换发生在首字节之前，客户端无感知、无重复输出，等价于“零中断”故障转移；
+- stream idle timeout 与首 Token 超时都归类为可重试，修复了此前 idle 超时返回 `context.Canceled`（不可重试）导致无法 fallback 的问题。
 
 ## 9.3 Circuit Breaker
 

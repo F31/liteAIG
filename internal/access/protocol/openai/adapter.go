@@ -104,6 +104,14 @@ type RerankResponse struct {
 type AudioTranscriptionResponse struct {
 	Text string `json:"text"`
 }
+type AudioSpeechRequest struct {
+	Model          string   `json:"model"`
+	Input          string   `json:"input"`
+	Voice          string   `json:"voice"`
+	ResponseFormat string   `json:"response_format,omitempty"`
+	Speed          *float64 `json:"speed,omitempty"`
+	Instructions   string   `json:"instructions,omitempty"`
+}
 type BatchCreateRequest struct {
 	Model            string            `json:"model,omitempty"`
 	InputFileID      string            `json:"input_file_id"`
@@ -477,9 +485,20 @@ func EncodeRerankResponse(response *interaction.UnifiedResponse, model string) (
 }
 
 func DecodeAudioTranscription(contentType string, reader io.Reader) (*interaction.UnifiedRequest, error) {
+	return decodeAudioForm(interaction.AudioTranscription, contentType, reader)
+}
+
+// DecodeAudioTranslation parses the OpenAI /v1/audio/translations multipart
+// body. It shares the transcription wire shape; only the endpoint and the
+// semantic task differ.
+func DecodeAudioTranslation(contentType string, reader io.Reader) (*interaction.UnifiedRequest, error) {
+	return decodeAudioForm(interaction.AudioTranslation, contentType, reader)
+}
+
+func decodeAudioForm(operation interaction.AudioOperation, contentType string, reader io.Reader) (*interaction.UnifiedRequest, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") || params["boundary"] == "" {
-		return nil, fmt.Errorf("audio transcription requires multipart form-data")
+		return nil, fmt.Errorf("audio %s requires multipart form-data", operation)
 	}
 	form, err := multipart.NewReader(reader, params["boundary"]).ReadForm(32 << 20)
 	if err != nil {
@@ -489,7 +508,7 @@ func DecodeAudioTranscription(contentType string, reader io.Reader) (*interactio
 	model := firstFormValue(form, "model")
 	files := form.File["file"]
 	if model == "" || len(files) == 0 {
-		return nil, fmt.Errorf("audio transcription model and file are required")
+		return nil, fmt.Errorf("audio %s model and file are required", operation)
 	}
 	file, err := files[0].Open()
 	if err != nil {
@@ -504,12 +523,26 @@ func DecodeAudioTranscription(contentType string, reader io.Reader) (*interactio
 	if err != nil {
 		return nil, err
 	}
-	return &interaction.UnifiedRequest{Kind: interaction.RequestAudio, Model: model, Audio: &interaction.AudioPayload{Filename: files[0].Filename, MediaType: files[0].Header.Get("Content-Type"), Data: data, Language: firstFormValue(form, "language"), Prompt: firstFormValue(form, "prompt"), ResponseFormat: firstFormValue(form, "response_format"), Temperature: temp}}, nil
+	return &interaction.UnifiedRequest{Kind: interaction.RequestAudio, Model: model, Audio: &interaction.AudioPayload{
+		Operation: operation, Filename: files[0].Filename, MediaType: files[0].Header.Get("Content-Type"),
+		Data: data, Language: firstFormValue(form, "language"), Prompt: firstFormValue(form, "prompt"),
+		ResponseFormat: firstFormValue(form, "response_format"), Temperature: temp,
+	}}, nil
 }
 
 func EncodeAudioTranscription(request *interaction.UnifiedRequest) ([]byte, string, error) {
+	return encodeAudioForm(request)
+}
+
+// EncodeAudioTranslation renders a canonical audio request as the shared
+// transcription/translation multipart wire body.
+func EncodeAudioTranslation(request *interaction.UnifiedRequest) ([]byte, string, error) {
+	return encodeAudioForm(request)
+}
+
+func encodeAudioForm(request *interaction.UnifiedRequest) ([]byte, string, error) {
 	if request == nil || request.Audio == nil {
-		return nil, "", fmt.Errorf("audio transcription payload is required")
+		return nil, "", fmt.Errorf("audio payload is required")
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -538,6 +571,47 @@ func EncodeAudioTranscription(request *interaction.UnifiedRequest) ([]byte, stri
 		return nil, "", err
 	}
 	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+// DecodeAudioSpeech parses the OpenAI /v1/audio/speech text-to-speech JSON
+// request.
+func DecodeAudioSpeech(body []byte) (*interaction.UnifiedRequest, error) {
+	var wire AudioSpeechRequest
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, err
+	}
+	if wire.Model == "" || wire.Input == "" || wire.Voice == "" {
+		return nil, fmt.Errorf("audio speech model, input, and voice are required")
+	}
+	return &interaction.UnifiedRequest{Kind: interaction.RequestAudio, Model: wire.Model, Audio: &interaction.AudioPayload{
+		Operation: interaction.AudioSpeech, Input: wire.Input, Voice: wire.Voice,
+		ResponseFormat: wire.ResponseFormat, Speed: wire.Speed, Instructions: wire.Instructions,
+	}}, nil
+}
+
+// EncodeAudioSpeech renders a canonical text-to-speech request as the OpenAI
+// /v1/audio/speech JSON wire body.
+func EncodeAudioSpeech(request *interaction.UnifiedRequest) ([]byte, error) {
+	if request == nil || request.Audio == nil {
+		return nil, fmt.Errorf("audio speech payload is required")
+	}
+	return json.Marshal(AudioSpeechRequest{
+		Model: request.Model, Input: request.Audio.Input, Voice: request.Audio.Voice,
+		ResponseFormat: request.Audio.ResponseFormat, Speed: request.Audio.Speed, Instructions: request.Audio.Instructions,
+	})
+}
+
+// DecodeAudioSpeechResponse reads the raw synthesized audio body. The
+// provider's content type is preserved so the gateway can relay it unchanged.
+func DecodeAudioSpeechResponse(reader io.Reader, contentType string) (*interaction.UnifiedResponse, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	return &interaction.UnifiedResponse{
+		RawContent: data,
+		Audio:      &interaction.AudioResult{Data: data, ContentType: contentType},
+	}, nil
 }
 
 func DecodeAudioTranscriptionResponse(reader io.Reader) (*interaction.UnifiedResponse, error) {

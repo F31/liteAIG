@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-type BatchMappingStore struct{ db *sql.DB }
+type BatchMappingStore struct{ db DBTX }
 
-func NewBatchMappingStore(db *sql.DB) *BatchMappingStore { return &BatchMappingStore{db: db} }
+func NewBatchMappingStore(db DBTX) *BatchMappingStore { return &BatchMappingStore{db: db} }
 
 func (s *BatchMappingStore) SaveBatchMapping(ctx context.Context, batchID, model string) error {
 	if batchID == "" || model == "" {

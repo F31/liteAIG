@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/F31/liteAIG/internal/controlplane/rbac"
 	"github.com/F31/liteAIG/internal/identity"
@@ -98,8 +99,18 @@ func NewService(
 }
 
 func (s *Service) Bootstrap(ctx context.Context, input Input) (*Result, error) {
-	if input.Username == "" || input.TenantName == "" || len(input.Password) < s.config.MinimumPasswordSize {
-		return nil, ErrInvalidInput
+	var problems []string
+	if input.Username == "" {
+		problems = append(problems, "username is required")
+	}
+	if input.TenantName == "" {
+		problems = append(problems, "tenantName is required")
+	}
+	if len(input.Password) < s.config.MinimumPasswordSize {
+		problems = append(problems, fmt.Sprintf("adminPassword must be at least %d characters", s.config.MinimumPasswordSize))
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidInput, strings.Join(problems, "; "))
 	}
 	password := append([]byte(nil), input.Password...)
 	defer clear(password)

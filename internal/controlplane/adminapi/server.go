@@ -306,6 +306,9 @@ func (s *Server) requireAuth(next webkit.Handler) webkit.Handler {
 			return webkit.NewAPIError(http.StatusUnauthorized, "UNAUTHORIZED", nil)
 		}
 		c.Set(ctxSession, session)
+		if session.TenantID != "" {
+			c.SetContext(tenancy.WithTenant(c.Request().Context(), session.TenantID))
+		}
 		return next(c)
 	}
 }
@@ -398,17 +401,19 @@ func (s *Server) mapError(err error) (int, string, map[string]any) {
 	case errors.Is(err, config.ErrNoPublishedVersion):
 		return http.StatusConflict, "NO_PUBLISHED_VERSION", nil
 	case errors.Is(err, setup.ErrInvalidInput):
-		return http.StatusBadRequest, "INVALID_REQUEST", nil
+		// Surface the reason (missing field / minimum password length) so the
+		// operator can fix the setup request instead of seeing "invalid request".
+		return http.StatusBadRequest, "INVALID_REQUEST", map[string]any{"diagnostic": err.Error()}
 	case errors.Is(err, setup.ErrAlreadyInitialized):
 		return http.StatusConflict, "ALREADY_INITIALIZED", nil
 	case errors.Is(err, setup.ErrProviderConnection):
-		return http.StatusBadGateway, "SETUP_PROVIDER_CONNECTION_FAILED", nil
+		return http.StatusBadGateway, "SETUP_PROVIDER_CONNECTION_FAILED", map[string]any{"diagnostic": err.Error()}
 	case errors.Is(err, setup.ErrProviderAuth):
-		return http.StatusBadRequest, "SETUP_PROVIDER_AUTH_FAILED", nil
+		return http.StatusBadRequest, "SETUP_PROVIDER_AUTH_FAILED", map[string]any{"diagnostic": err.Error()}
 	case errors.Is(err, setup.ErrProviderError):
-		return http.StatusBadGateway, "SETUP_PROVIDER_ERROR", nil
+		return http.StatusBadGateway, "SETUP_PROVIDER_ERROR", map[string]any{"diagnostic": err.Error()}
 	case errors.Is(err, setup.ErrModelNotFound):
-		return http.StatusBadRequest, "SETUP_MODEL_NOT_FOUND", nil
+		return http.StatusBadRequest, "SETUP_MODEL_NOT_FOUND", map[string]any{"diagnostic": err.Error()}
 	case errors.Is(err, backend.ErrRuntimeRefreshFailed):
 		return http.StatusInternalServerError, "RUNTIME_REFRESH_FAILED", nil
 	}

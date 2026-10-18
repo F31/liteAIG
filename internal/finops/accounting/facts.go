@@ -21,24 +21,24 @@ type RouteEvidence struct {
 	Exclusions   []string `json:"exclusions"`
 }
 type Facts struct {
-	UsageEventID, RequestID, TenantID, ProjectID, KeyID, LogicalModel, DeploymentID, Outcome, UsageSource, GuardrailStatus string
-	InputTokens, OutputTokens                                                                                              int64
-	CacheReadTokens, CacheWriteTokens, CachedInputTokens, ReasoningTokens, ToolCalls                                       int64
-	RetryCount, FallbackCount                                                                                              int
-	LatencyMS                                                                                                              int64
-	SnapshotVersion, SecurityEpoch                                                                                         int64
-	ProviderCost                                                                                                           *float64
-	ProviderCurrency                                                                                                       string
-	ReceivedAt, CompletedAt                                                                                                time.Time
-	Attempts                                                                                                               []Attempt
-	RouteEvidence                                                                                                          []RouteEvidence
-	BudgetPolicyID, ReservationID                                                                                          string
-	ActualTokens                                                                                                           *int64
-	UserID, OrgUnitID, OrgPathSnapshot, CostCenterID, AttributionTrust                                                     string
-	SessionID, TaskID, RootTaskID, ParentTaskID, AgentID                                                                   string
-	AgentVersion, AgentEndpointID                                                                                          string
-	Estimated                                                                                                              bool
-	EstimationMethod                                                                                                       string
+	UsageEventID, RequestID, ParentRequestID, TenantID, ProjectID, KeyID, LogicalModel, DeploymentID, Outcome, UsageSource, GuardrailStatus string
+	InputTokens, OutputTokens                                                                                                               int64
+	CacheReadTokens, CacheWriteTokens, CachedInputTokens, ReasoningTokens, ToolCalls                                                        int64
+	RetryCount, FallbackCount                                                                                                               int
+	LatencyMS                                                                                                                               int64
+	SnapshotVersion, SecurityEpoch                                                                                                          int64
+	ProviderCost                                                                                                                            *float64
+	ProviderCurrency                                                                                                                        string
+	ReceivedAt, CompletedAt                                                                                                                 time.Time
+	Attempts                                                                                                                                []Attempt
+	RouteEvidence                                                                                                                           []RouteEvidence
+	BudgetPolicyID, ReservationID                                                                                                           string
+	ActualTokens                                                                                                                            *int64
+	UserID, OrgUnitID, OrgPathSnapshot, CostCenterID, AttributionTrust                                                                      string
+	SessionID, TaskID, RootTaskID, ParentTaskID, AgentID                                                                                    string
+	AgentVersion, AgentEndpointID                                                                                                           string
+	Estimated                                                                                                                               bool
+	EstimationMethod                                                                                                                        string
 }
 type RequestRecord struct {
 	RequestID        string          `json:"requestId"`

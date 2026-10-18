@@ -11,9 +11,9 @@ import (
 	"github.com/F31/liteAIG/internal/tenancy"
 )
 
-type APIKeyRepository struct{ db *sql.DB }
+type APIKeyRepository struct{ db DBTX }
 
-func NewAPIKeyRepository(db *sql.DB) *APIKeyRepository { return &APIKeyRepository{db: db} }
+func NewAPIKeyRepository(db DBTX) *APIKeyRepository { return &APIKeyRepository{db: db} }
 
 func (r *APIKeyRepository) ActivePepper(ctx context.Context) (apikey.PepperVersion, error) {
 	var value apikey.PepperVersion

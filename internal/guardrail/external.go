@@ -15,7 +15,12 @@ const (
 
 var ErrExternalUnavailable = errors.New("external guardrail unavailable")
 
-type ExternalRequest struct{ TenantID, ProjectID, RequestID, ContentHash string }
+type ExternalRequest struct {
+	TenantID, ProjectID, RequestID, ContentHash string
+	// Content is the released text being evaluated. Providers that only need a
+	// stable digest can ignore it; external content-safety services use it.
+	Content string
+}
 type ExternalResult struct {
 	Blocked, Degraded bool
 	Reason            string

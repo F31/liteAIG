@@ -22,15 +22,15 @@ type SecretResolver interface {
 	Resolve(context.Context, string) ([]byte, error)
 }
 type Config struct {
-	BaseURL, SecretRef, ChatPath, EmbeddingPath, RerankPath, AudioTranscriptionsPath, BatchPath, FilesPath, ModelsPath string
-	RequestTimeout, HealthTimeout                                                                                      time.Duration
-	AllowInsecureHTTP                                                                                                  bool
-	Capabilities                                                                                                       contracts.CapabilitySet
-	Parameters                                                                                                         interaction.ParameterSupport
+	BaseURL, SecretRef, ChatPath, EmbeddingPath, RerankPath, AudioTranscriptionsPath, AudioTranslationsPath, AudioSpeechPath, BatchPath, FilesPath, ModelsPath string
+	RequestTimeout, HealthTimeout                                                                                                                              time.Duration
+	AllowInsecureHTTP                                                                                                                                          bool
+	Capabilities                                                                                                                                               contracts.CapabilitySet
+	Parameters                                                                                                                                                 interaction.ParameterSupport
 }
 
 func DefaultConfig() Config {
-	return Config{ChatPath: "/v1/chat/completions", EmbeddingPath: "/v1/embeddings", RerankPath: "/v1/rerank", AudioTranscriptionsPath: "/v1/audio/transcriptions", BatchPath: "/v1/batches", FilesPath: "/v1/files", ModelsPath: "/v1/models", RequestTimeout: 30 * time.Second, HealthTimeout: 2 * time.Second, Capabilities: contracts.CapabilitySet{"chat": true, "embedding": true, "rerank": true, "audio": true, "batch": true, "stream": true}}
+	return Config{ChatPath: "/v1/chat/completions", EmbeddingPath: "/v1/embeddings", RerankPath: "/v1/rerank", AudioTranscriptionsPath: "/v1/audio/transcriptions", AudioTranslationsPath: "/v1/audio/translations", AudioSpeechPath: "/v1/audio/speech", BatchPath: "/v1/batches", FilesPath: "/v1/files", ModelsPath: "/v1/models", RequestTimeout: 30 * time.Second, HealthTimeout: 2 * time.Second, Capabilities: contracts.CapabilitySet{"chat": true, "embedding": true, "rerank": true, "audio": true, "speech": true, "batch": true, "stream": true}}
 }
 
 type Connector struct {
@@ -47,7 +47,7 @@ func New(config Config, client *http.Client, secrets SecretResolver) (*Connector
 	if parsed.Scheme != "https" && !config.AllowInsecureHTTP {
 		return nil, errors.New("OpenAI connector requires HTTPS")
 	}
-	if config.SecretRef == "" || config.ChatPath == "" || config.EmbeddingPath == "" || config.RerankPath == "" || config.AudioTranscriptionsPath == "" || config.BatchPath == "" || config.FilesPath == "" || config.ModelsPath == "" || config.RequestTimeout <= 0 || config.HealthTimeout <= 0 || client == nil || secrets == nil {
+	if config.SecretRef == "" || config.ChatPath == "" || config.EmbeddingPath == "" || config.RerankPath == "" || config.AudioTranscriptionsPath == "" || config.AudioTranslationsPath == "" || config.AudioSpeechPath == "" || config.BatchPath == "" || config.FilesPath == "" || config.ModelsPath == "" || config.RequestTimeout <= 0 || config.HealthTimeout <= 0 || client == nil || secrets == nil {
 		return nil, errors.New("complete OpenAI connector configuration is required")
 	}
 	return &Connector{config: config, client: client, secrets: secrets}, nil
@@ -78,7 +78,11 @@ func (c *Connector) Invoke(ctx context.Context, request contracts.InvocationRequ
 	case interaction.RequestRerank:
 		canonical, err = protocol.DecodeRerankResponse(response.Body)
 	case interaction.RequestAudio:
-		canonical, err = protocol.DecodeAudioTranscriptionResponse(response.Body)
+		if request.Request.Audio != nil && request.Request.Audio.Operation == interaction.AudioSpeech {
+			canonical, err = protocol.DecodeAudioSpeechResponse(response.Body, response.Header.Get("Content-Type"))
+		} else {
+			canonical, err = protocol.DecodeAudioTranscriptionResponse(response.Body)
+		}
 	case interaction.RequestBatch:
 		canonical, err = protocol.DecodeBatchResponse(response.Body)
 	case interaction.RequestFile:
@@ -185,8 +189,20 @@ func (c *Connector) encode(request *interaction.UnifiedRequest) ([]byte, string,
 		body, err := protocol.EncodeRerank(request)
 		return body, http.MethodPost, c.config.RerankPath, "application/json", err
 	case interaction.RequestAudio:
-		body, contentType, err := protocol.EncodeAudioTranscription(request)
-		return body, http.MethodPost, c.config.AudioTranscriptionsPath, contentType, err
+		if request.Audio == nil {
+			return nil, "", "", "", errors.New("audio payload is required")
+		}
+		switch request.Audio.Operation {
+		case interaction.AudioSpeech:
+			body, err := protocol.EncodeAudioSpeech(request)
+			return body, http.MethodPost, c.config.AudioSpeechPath, "application/json", err
+		case interaction.AudioTranslation:
+			body, contentType, err := protocol.EncodeAudioTranslation(request)
+			return body, http.MethodPost, c.config.AudioTranslationsPath, contentType, err
+		default:
+			body, contentType, err := protocol.EncodeAudioTranscription(request)
+			return body, http.MethodPost, c.config.AudioTranscriptionsPath, contentType, err
+		}
 	case interaction.RequestBatch:
 		return c.encodeBatch(request)
 	case interaction.RequestFile:
@@ -269,12 +285,15 @@ func (c *Connector) encodeBatch(request *interaction.UnifiedRequest) ([]byte, st
 }
 
 func (c *Connector) do(ctx context.Context, method, path string, body []byte, contentType string, stream bool) (*http.Response, error) {
-	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
-	defer func() {
-		if callCtx.Err() != nil {
-			cancel()
-		}
-	}()
+	// Streaming responses can legitimately outlive RequestTimeout; the
+	// executor's first-token and idle timers bound them instead.
+	callCtx := ctx
+	cancel := context.CancelFunc(func() {})
+	if stream {
+		callCtx, cancel = context.WithCancel(ctx)
+	} else {
+		callCtx, cancel = context.WithTimeout(ctx, c.config.RequestTimeout)
+	}
 	secret, err := c.secrets.Resolve(callCtx, c.config.SecretRef)
 	if err != nil {
 		cancel()

@@ -13,9 +13,9 @@ import (
 )
 
 // AlertStore persists tenant-scoped alert rules and incidents.
-type AlertStore struct{ db *sql.DB }
+type AlertStore struct{ db DBTX }
 
-func NewAlertStore(db *sql.DB) *AlertStore { return &AlertStore{db: db} }
+func NewAlertStore(db DBTX) *AlertStore { return &AlertStore{db: db} }
 
 func (s *AlertStore) CreateRule(ctx context.Context, scope tenancy.TenantScope, rule alert.Rule) error {
 	if err := scope.Validate(); err != nil {

@@ -2,7 +2,6 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/F31/liteAIG/internal/tenancy"
@@ -15,9 +14,9 @@ type ToolCallEvent struct {
 }
 
 // ToolCallStore persists tenant-scoped tool call events.
-type ToolCallStore struct{ db *sql.DB }
+type ToolCallStore struct{ db DBTX }
 
-func NewToolCallStore(db *sql.DB) *ToolCallStore { return &ToolCallStore{db: db} }
+func NewToolCallStore(db DBTX) *ToolCallStore { return &ToolCallStore{db: db} }
 
 func (s *ToolCallStore) Create(ctx context.Context, scope tenancy.TenantScope, event ToolCallEvent) error {
 	if err := scope.Validate(); err != nil {

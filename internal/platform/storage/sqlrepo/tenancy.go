@@ -21,11 +21,11 @@ type queryer interface {
 
 // TenancyRepository implements the tenant-scoped repository contract.
 type TenancyRepository struct {
-	db *sql.DB
+	db DBTX
 	q  queryer
 }
 
-func NewTenancyRepository(db *sql.DB) *TenancyRepository {
+func NewTenancyRepository(db DBTX) *TenancyRepository {
 	return &TenancyRepository{db: db, q: db}
 }
 

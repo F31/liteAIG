@@ -11,9 +11,9 @@ import (
 )
 
 // GuardrailPolicyStore persists tenant-scoped guardrail policies.
-type GuardrailPolicyStore struct{ db *sql.DB }
+type GuardrailPolicyStore struct{ db DBTX }
 
-func NewGuardrailPolicyStore(db *sql.DB) *GuardrailPolicyStore { return &GuardrailPolicyStore{db: db} }
+func NewGuardrailPolicyStore(db DBTX) *GuardrailPolicyStore { return &GuardrailPolicyStore{db: db} }
 
 func (s *GuardrailPolicyStore) Create(ctx context.Context, scope tenancy.TenantScope, policy guardraildomain.Policy, change guardraildomain.ChangeType, actor string) error {
 	if err := scope.Validate(); err != nil {

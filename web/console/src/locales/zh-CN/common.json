@@ -70,7 +70,31 @@
     "model": "模型",
     "retries": "重试",
     "fallbacks": "回退",
-    "samples": "样本"
+    "samples": "样本",
+    "recKind": {
+      "routing": "路由",
+      "cache": "缓存",
+      "attribution": "归因",
+      "baseline": "基线"
+    },
+    "recTitle": {
+      "routing": "检查重试与回退成本",
+      "cache": "缓存避免了重复的上游调用",
+      "attribution": "头部项目驱动了当前开销",
+      "baseline": "暂无优化信号"
+    },
+    "recDetail": {
+      "routing": "重试或回退请求正在增加上游费用。请检查 Provider 健康状况和路由排序。",
+      "cache": "缓存命中避免了约 {{tokens}} 个上游 Token，其中 {{priced}} 个按 {{version}} 参考价折算，预估节省 ${{savings}}（{{unpriced}} 个未定价）。此为预估值，非上游实际计费。",
+      "attribution": "项目 {{project}} 在最近窗口内产生了 {{spend}} 上游费用。",
+      "baseline": "近期用量无重试/回退开销或缓存活动，无需操作。"
+    },
+    "recConfigTitle": {
+      "routing": "成本权重调整建议"
+    },
+    "recConfigExplanation": {
+      "routing": "观测成本已超过阈值"
+    }
   },
   "setup": {
     "title": "首次调用初始化",
@@ -168,6 +192,15 @@
     "selectPresetModel": "选择预置模型或输入自定义模型",
     "dataRegion": "数据区域",
     "capabilities": "能力",
+    "capabilitiesHelp": "文本(chat)、视觉(vision)、推理(reasoning)、工具(tools)、向量(embedding)、重排(rerank)、语音识别(audio)、语音合成(speech)。路由将能力作为硬约束。",
+    "capability_chat": "文本 (chat)",
+    "capability_vision": "视觉 (vision)",
+    "capability_reasoning": "推理 (reasoning)",
+    "capability_tools": "工具 (tools)",
+    "capability_embedding": "向量 (embedding)",
+    "capability_rerank": "重排 (rerank)",
+    "capability_audio": "语音识别 (audio)",
+    "capability_speech": "语音合成 (speech)",
     "contextWindow": "上下文窗口",
     "priority": "优先级",
     "createDeployment": "新增模型端点",

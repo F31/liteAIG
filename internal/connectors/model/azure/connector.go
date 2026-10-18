@@ -180,7 +180,13 @@ func (c *Connector) NormalizeError(err error) *contracts.UpstreamError {
 }
 
 func (c *Connector) do(ctx context.Context, path string, body []byte, stream bool) (*http.Response, error) {
-	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
+	callCtx := ctx
+	cancel := context.CancelFunc(func() {})
+	if stream {
+		callCtx, cancel = context.WithCancel(ctx)
+	} else {
+		callCtx, cancel = context.WithTimeout(ctx, c.config.RequestTimeout)
+	}
 	secret, err := c.secrets.Resolve(callCtx, c.config.SecretRef)
 	if err != nil {
 		cancel()

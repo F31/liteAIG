@@ -32,6 +32,9 @@ type StreamGuardConfig struct {
 	ProjectID       string
 	RequestID       string
 	SnapshotVersion int64
+	// ExternalFailMode controls Layer 3 provider outages. Empty defaults to
+	// fail_open; fail_closed cuts the stream when the provider is unavailable.
+	ExternalFailMode guardraildomain.ExternalFailMode
 }
 
 // StreamGuard applies the three tiers to each chunk delta. It is driven by a
@@ -56,7 +59,7 @@ func NewStreamGuard(cfg StreamGuardConfig) *StreamGuard {
 		cfg:      cfg,
 	}
 	if cfg.External != nil {
-		guard.shadow = guardraildomain.NewShadowGuard(cfg.External, guard.reportRetroactive)
+		guard.shadow = guardraildomain.NewShadowGuard(cfg.External, cfg.ExternalFailMode, guard.reportRetroactive)
 	}
 	return guard
 }
@@ -129,7 +132,7 @@ func (g *StreamGuard) submitReleased(ctx context.Context, released string) {
 	sum := sha256.Sum256([]byte(released))
 	g.shadow.Submit(ctx, guardraildomain.ExternalRequest{
 		TenantID: g.cfg.TenantID, ProjectID: g.cfg.ProjectID, RequestID: g.cfg.RequestID,
-		ContentHash: hex.EncodeToString(sum[:]),
+		ContentHash: hex.EncodeToString(sum[:]), Content: released,
 	}, released)
 }
 

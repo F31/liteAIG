@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +17,145 @@ import (
 
 // processStartedAt anchors the uptime gauge on the metrics endpoint.
 var processStartedAt = time.Now()
+
+// processMetricKey identifies one provider/outcome series. Provider IDs are
+// bounded by the configured catalog, so this stays low-cardinality.
+type processMetricKey struct{ provider, outcome string }
+
+type processHistogram struct {
+	buckets []float64
+	counts  []uint64
+	sum     float64
+	count   uint64
+}
+
+func newProcessHistogram(buckets []float64) *processHistogram {
+	return &processHistogram{buckets: append([]float64(nil), buckets...), counts: make([]uint64, len(buckets))}
+}
+
+func (h *processHistogram) observe(value float64) {
+	if value < 0 {
+		value = 0
+	}
+	h.sum += value
+	h.count++
+	for index, upper := range h.buckets {
+		if value <= upper {
+			h.counts[index]++
+		}
+	}
+}
+
+var processMetrics = struct {
+	sync.Mutex
+	requests map[processMetricKey]uint64
+	latency  map[processMetricKey]*processHistogram
+	ttft     map[processMetricKey]*processHistogram
+}{
+	requests: map[processMetricKey]uint64{},
+	latency:  map[processMetricKey]*processHistogram{},
+	ttft:     map[processMetricKey]*processHistogram{},
+}
+
+var latencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+var ttftBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+
+// recordProcessMetrics collects provider-level latency and TTFT histograms for
+// the Prometheus endpoint without touching the database on every scrape.
+func recordProcessMetrics(providerID, outcome string, latency, ttft time.Duration) {
+	if providerID == "" {
+		providerID = "unknown"
+	}
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	key := processMetricKey{provider: providerID, outcome: outcome}
+	processMetrics.Lock()
+	defer processMetrics.Unlock()
+	processMetrics.requests[key]++
+	if processMetrics.latency[key] == nil {
+		processMetrics.latency[key] = newProcessHistogram(latencyBuckets)
+	}
+	processMetrics.latency[key].observe(latency.Seconds())
+	if ttft > 0 {
+		if processMetrics.ttft[key] == nil {
+			processMetrics.ttft[key] = newProcessHistogram(ttftBuckets)
+		}
+		processMetrics.ttft[key].observe(ttft.Seconds())
+	}
+}
+
+func sortedProcessKeys(values map[processMetricKey]uint64) []processMetricKey {
+	keys := make([]processMetricKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].provider == keys[j].provider {
+			return keys[i].outcome < keys[j].outcome
+		}
+		return keys[i].provider < keys[j].provider
+	})
+	return keys
+}
+
+func writeProcessHistogramSamples(write func(string, ...any), name, labels string, histogram *processHistogram) {
+	if histogram == nil {
+		return
+	}
+	for index, upper := range histogram.buckets {
+		write("%s_bucket{%s,le=%q} %d\n", name, labels, strconv.FormatFloat(upper, 'g', -1, 64), histogram.counts[index])
+	}
+	write("%s_bucket{%s,le=\"+Inf\"} %d\n", name, labels, histogram.count)
+	write("%s_sum{%s} %g\n", name, labels, histogram.sum)
+	write("%s_count{%s} %d\n", name, labels, histogram.count)
+}
+
+func writeProcessMetrics(write func(string, ...any)) {
+	processMetrics.Lock()
+	requests := make(map[processMetricKey]uint64, len(processMetrics.requests))
+	for key, value := range processMetrics.requests {
+		requests[key] = value
+	}
+	latency := make(map[processMetricKey]*processHistogram, len(processMetrics.latency))
+	for key, value := range processMetrics.latency {
+		copyValue := *value
+		copyValue.counts = append([]uint64(nil), value.counts...)
+		latency[key] = &copyValue
+	}
+	ttft := make(map[processMetricKey]*processHistogram, len(processMetrics.ttft))
+	for key, value := range processMetrics.ttft {
+		copyValue := *value
+		copyValue.counts = append([]uint64(nil), value.counts...)
+		ttft[key] = &copyValue
+	}
+	processMetrics.Unlock()
+
+	keys := sortedProcessKeys(requests)
+	if len(keys) > 0 {
+		write("# HELP liteaig_provider_requests_total Upstream requests by provider and outcome.\n")
+		write("# TYPE liteaig_provider_requests_total counter\n")
+		for _, key := range keys {
+			write("liteaig_provider_requests_total{provider=%q,outcome=%q} %d\n", key.provider, key.outcome, requests[key])
+		}
+	}
+	if len(keys) > 0 {
+		write("# HELP liteaig_provider_request_duration_seconds Upstream request latency by provider and outcome.\n")
+		write("# TYPE liteaig_provider_request_duration_seconds histogram\n")
+		for _, key := range keys {
+			labels := fmt.Sprintf("provider=%q,outcome=%q", key.provider, key.outcome)
+			writeProcessHistogramSamples(write, "liteaig_provider_request_duration_seconds", labels, latency[key])
+		}
+		if len(ttft) > 0 {
+			write("# HELP liteaig_provider_ttft_seconds Time to first streamed chunk by provider and outcome.\n")
+			write("# TYPE liteaig_provider_ttft_seconds histogram\n")
+			for _, key := range keys {
+				labels := fmt.Sprintf("provider=%q,outcome=%q", key.provider, key.outcome)
+				writeProcessHistogramSamples(write, "liteaig_provider_ttft_seconds", labels, ttft[key])
+			}
+		}
+	}
+}
 
 // auditRetentionPurge tracks the last committed audit-retention sweep for the
 // /metrics exposition. It is process-local and reset on restart.
@@ -74,6 +216,8 @@ func liteMetrics(store *sqlrepo.Store) webkit.Handler {
 		write("# HELP liteaig_requests_total Total requests recorded in the ledger.\n")
 		write("# TYPE liteaig_requests_total counter\n")
 		writeLedgerMetrics(write, snapshot)
+		writeProcessMetrics(write)
+		writeAuxiliaryMetrics(write)
 		writeA2APushOutboxMetrics(ctx, write, store)
 		writeEventOutboxMetrics(ctx, write, store)
 		writeAuditRetentionMetrics(write)
@@ -176,5 +320,58 @@ func writeLedgerMetrics(write func(string, ...any), snapshot *sqlrepo.MetricSnap
 	for _, metric := range snapshot.ByModel {
 		write("liteaig_model_requests_total{model=%q,outcome=%q} %d\n", metric.LogicalModel, metric.Outcome, metric.Requests)
 		write("liteaig_model_latency_ms_total{model=%q,outcome=%q} %d\n", metric.LogicalModel, metric.Outcome, metric.LatencyMS)
+	}
+}
+
+type auxiliaryMetricKey struct{ kind, outcome string }
+
+var auxiliaryMetrics = struct {
+	sync.Mutex
+	calls  map[auxiliaryMetricKey]uint64
+	tokens map[auxiliaryMetricKey]uint64
+}{
+	calls:  map[auxiliaryMetricKey]uint64{},
+	tokens: map[auxiliaryMetricKey]uint64{},
+}
+
+// recordAuxiliaryCall makes semantic-cache embeddings and LLM-as-Judge calls
+// observable even though they are outside the main request budget/accounting
+// path. This is an explicit exemption, not an accounting substitute.
+func recordAuxiliaryCall(kind, outcome string, tokens int64) {
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	key := auxiliaryMetricKey{kind: kind, outcome: outcome}
+	auxiliaryMetrics.Lock()
+	auxiliaryMetrics.calls[key]++
+	if tokens > 0 {
+		auxiliaryMetrics.tokens[key] += uint64(tokens)
+	}
+	auxiliaryMetrics.Unlock()
+}
+
+func writeAuxiliaryMetrics(write func(string, ...any)) {
+	auxiliaryMetrics.Lock()
+	calls := make(map[auxiliaryMetricKey]uint64, len(auxiliaryMetrics.calls))
+	for key, value := range auxiliaryMetrics.calls {
+		calls[key] = value
+	}
+	tokens := make(map[auxiliaryMetricKey]uint64, len(auxiliaryMetrics.tokens))
+	for key, value := range auxiliaryMetrics.tokens {
+		tokens[key] = value
+	}
+	auxiliaryMetrics.Unlock()
+	if len(calls) == 0 {
+		return
+	}
+	write("# HELP liteaig_auxiliary_calls_total Auxiliary provider calls outside the main budget/accounting path.\n")
+	write("# TYPE liteaig_auxiliary_calls_total counter\n")
+	for key, value := range calls {
+		write("liteaig_auxiliary_calls_total{kind=%q,outcome=%q} %d\n", key.kind, key.outcome, value)
+	}
+	write("# HELP liteaig_auxiliary_tokens_total Tokens consumed by auxiliary provider calls.\n")
+	write("# TYPE liteaig_auxiliary_tokens_total counter\n")
+	for key, value := range tokens {
+		write("liteaig_auxiliary_tokens_total{kind=%q,outcome=%q} %d\n", key.kind, key.outcome, value)
 	}
 }

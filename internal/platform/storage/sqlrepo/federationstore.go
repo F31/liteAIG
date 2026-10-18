@@ -12,9 +12,9 @@ import (
 
 // FederationStore persists federated agent trust relationships as JSON bodies
 // with indexed lookup columns.
-type FederationStore struct{ db *sql.DB }
+type FederationStore struct{ db DBTX }
 
-func NewFederationStore(db *sql.DB) *FederationStore { return &FederationStore{db: db} }
+func NewFederationStore(db DBTX) *FederationStore { return &FederationStore{db: db} }
 
 // Put inserts or replaces a relationship.
 func (s *FederationStore) Put(ctx context.Context, relationship federation.Relationship) error {

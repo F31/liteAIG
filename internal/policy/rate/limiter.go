@@ -235,3 +235,17 @@ func sameMinute(a, b time.Time) bool {
 func nextMinute(now time.Time) time.Time {
 	return now.Truncate(time.Minute).Add(time.Minute)
 }
+
+// RPM is the request-rate limiter contract used by the pipeline. The
+// in-process Limiter is used by Lite; RedisLimiter provides Standard-tier
+// cross-replica enforcement.
+type RPM interface {
+	Allow(tenantID, projectID string, policy Policy) Decision
+}
+
+// TPM is the token-rate meter contract. Reserve is called before the provider
+// call and Reconcile after actual usage is known.
+type TPM interface {
+	Reserve(tenantID, projectID string, estimated int64) (TPMDecision, int)
+	Reconcile(tenantID, projectID string, estimated, actual int64)
+}

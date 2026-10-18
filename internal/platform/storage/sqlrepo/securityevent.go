@@ -2,16 +2,15 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 
 	"github.com/F31/liteAIG/internal/guardrail"
 	"github.com/F31/liteAIG/internal/tenancy"
 )
 
-type SecurityEventStore struct{ db *sql.DB }
+type SecurityEventStore struct{ db DBTX }
 
-func NewSecurityEventStore(db *sql.DB) *SecurityEventStore { return &SecurityEventStore{db: db} }
+func NewSecurityEventStore(db DBTX) *SecurityEventStore { return &SecurityEventStore{db: db} }
 
 func (s *SecurityEventStore) Create(ctx context.Context, scope tenancy.TenantScope, event guardrail.SecurityEvent) error {
 	if err := scope.Validate(); err != nil {

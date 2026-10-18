@@ -2,6 +2,8 @@ package guardrail
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -95,6 +97,7 @@ func (g *BufferedStreamGuard) Flush() builtin.Result {
 // violation stops further output and reports a retroactive disposition.
 type ShadowGuard struct {
 	provider ExternalProvider
+	failMode ExternalFailMode
 	observe  func(retroactive bool)
 	mu       sync.Mutex
 	stopped  bool
@@ -102,20 +105,35 @@ type ShadowGuard struct {
 }
 
 // NewShadowGuard builds a Layer 3 guard. observe reports violations; when it
-// returns, the stop channel is closed and future output is refused.
-func NewShadowGuard(provider ExternalProvider, observe func(retroactive bool)) *ShadowGuard {
-	return &ShadowGuard{provider: provider, observe: observe, stop: make(chan struct{})}
+// returns, the stop channel is closed and future output is refused. An empty
+// failMode defaults to fail_open so a provider outage does not cut traffic.
+func NewShadowGuard(provider ExternalProvider, failMode ExternalFailMode, observe func(retroactive bool)) *ShadowGuard {
+	if failMode == "" {
+		failMode = ExternalFailOpen
+	}
+	return &ShadowGuard{provider: provider, failMode: failMode, observe: observe, stop: make(chan struct{})}
 }
 
 // Submit sends already-released content for async evaluation. It never blocks
 // the caller on the provider.
 func (g *ShadowGuard) Submit(ctx context.Context, request ExternalRequest, released string) {
 	go func() {
-		if request.ContentHash == "" {
-			request.ContentHash = "shadow:" + released
+		if request.Content == "" {
+			request.Content = released
 		}
-		result, err := EvaluateExternal(ctx, g.provider, request, ExternalFailOpen, nil)
-		if err != nil || !result.Blocked {
+		if request.ContentHash == "" {
+			sum := sha256.Sum256([]byte(released))
+			request.ContentHash = hex.EncodeToString(sum[:])
+		}
+		result, err := EvaluateExternal(ctx, g.provider, request, g.failMode, nil)
+		if err != nil {
+			if g.failMode != ExternalFailClosed {
+				return
+			}
+			result.Blocked = true
+			result.Reason = "provider_unavailable"
+		}
+		if !result.Blocked {
 			return
 		}
 		g.mu.Lock()

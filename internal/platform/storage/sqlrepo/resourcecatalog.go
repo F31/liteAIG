@@ -7,9 +7,9 @@ import (
 	"github.com/F31/liteAIG/internal/catalog"
 )
 
-type ResourceCatalogRepository struct{ db *sql.DB }
+type ResourceCatalogRepository struct{ db DBTX }
 
-func NewResourceCatalogRepository(db *sql.DB) *ResourceCatalogRepository {
+func NewResourceCatalogRepository(db DBTX) *ResourceCatalogRepository {
 	return &ResourceCatalogRepository{db: db}
 }
 

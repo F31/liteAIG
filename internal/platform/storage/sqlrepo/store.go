@@ -53,8 +53,17 @@ func Open(db *sql.DB, deps Deps) *Store {
 	if db == nil {
 		panic("sqlrepo: Open requires a non-nil *sql.DB")
 	}
+	return OpenWithDB(db, db, deps)
+}
+
+// OpenWithDB constructs every repository against a DBTX (for example the
+// Postgres tenant router) while keeping raw for connection-lifecycle duties.
+func OpenWithDB(db DBTX, raw *sql.DB, deps Deps) *Store {
+	if db == nil || raw == nil {
+		panic("sqlrepo: OpenWithDB requires non-nil handles")
+	}
 	return &Store{
-		db:               db,
+		db:               raw,
 		Tenancy:          NewTenancyRepository(db),
 		Bootstrap:        NewBootstrapRepository(db),
 		Config:           NewConfigRepository(db),

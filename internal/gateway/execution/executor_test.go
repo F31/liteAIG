@@ -131,6 +131,32 @@ func TestStreamAttemptsCarryCredentialAndOutcome(t *testing.T) {
 		t.Fatalf("attempt = %+v", got)
 	}
 }
+
+// A healthy long stream must not inherit the non-streaming attempt budget.
+func TestLongStreamIsNotCutByAttemptTimeout(t *testing.T) {
+	snapshot, plan := routeFixture(t)
+	invoker := &fakeInvoker{stream: func(ctx context.Context, w contracts.StreamWriter) error {
+		for i := 0; i < 6; i++ {
+			if err := w.WriteChunk(ctx, contracts.StreamChunk{Event: interaction.StreamEvent{Delta: "x"}}); err != nil {
+				return err
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil
+	}}
+	p := policy()
+	p.AttemptTimeout = 10 * time.Millisecond
+	p.StreamTotalTimeout = 0
+	p.StreamIdleTimeout = 200 * time.Millisecond
+	p.FirstTokenTimeout = 200 * time.Millisecond
+	writer := &output{}
+	executor := New(p, StaticResolver{"a": invoker}, nil, noSleep{}, nil)
+	attempts, err := executor.ExecuteStream(context.Background(), plan, snapshot, &interaction.UnifiedRequest{}, writer)
+	if err != nil || len(attempts) != 1 || writer.count != 6 {
+		t.Fatalf("ExecuteStream() attempts=%+v count=%d err=%v", attempts, writer.count, err)
+	}
+}
+
 func TestStreamIdleTimeoutCanFallback(t *testing.T) {
 	snapshot, plan := routeFixture(t)
 	first := &fakeInvoker{stream: func(ctx context.Context, _ contracts.StreamWriter) error { <-ctx.Done(); return ctx.Err() }}
@@ -139,6 +165,27 @@ func TestStreamIdleTimeoutCanFallback(t *testing.T) {
 	attempts, err := executor.ExecuteStream(context.Background(), plan, snapshot, &interaction.UnifiedRequest{}, &output{})
 	if err != nil || len(attempts) < 2 || second.calls != 1 {
 		t.Fatalf("ExecuteStream() attempts=%+v second=%d err=%v", attempts, second.calls, err)
+	}
+}
+
+// TestFirstTokenTimeoutFailsOverWithoutRetryingStalledPrimary proves the
+// pre-commit first-token deadline: a primary that stalls before its first byte
+// is abandoned immediately (no same-deployment retries) and the next
+// deployment serves the stream, so the client sees no interruption.
+func TestFirstTokenTimeoutFailsOverWithoutRetryingStalledPrimary(t *testing.T) {
+	snapshot, plan := routeFixture(t)
+	stalled := &fakeInvoker{stream: func(ctx context.Context, _ contracts.StreamWriter) error { <-ctx.Done(); return ctx.Err() }}
+	healthy := &fakeInvoker{stream: func(ctx context.Context, w contracts.StreamWriter) error {
+		w.WriteChunk(ctx, contracts.StreamChunk{Event: interaction.StreamEvent{Delta: "ok"}})
+		return nil
+	}}
+	executor := New(policy(), StaticResolver{"a": stalled, "b": healthy}, nil, noSleep{}, nil)
+	attempts, err := executor.ExecuteStream(context.Background(), plan, snapshot, &interaction.UnifiedRequest{}, &output{})
+	if err != nil || healthy.calls != 1 {
+		t.Fatalf("ExecuteStream() attempts=%+v healthy=%d err=%v", attempts, healthy.calls, err)
+	}
+	if len(attempts) != 2 || attempts[0].DeploymentID != "a" || attempts[0].Outcome != "first_token_timeout" || attempts[1].DeploymentID != "b" || attempts[1].Outcome != "success" {
+		t.Fatalf("attempts = %+v", attempts)
 	}
 }
 

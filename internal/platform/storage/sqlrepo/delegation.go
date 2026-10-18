@@ -11,9 +11,9 @@ import (
 )
 
 // DelegationStore persists identity-owned agent delegation grants.
-type DelegationStore struct{ db *sql.DB }
+type DelegationStore struct{ db DBTX }
 
-func NewDelegationStore(db *sql.DB) *DelegationStore { return &DelegationStore{db: db} }
+func NewDelegationStore(db DBTX) *DelegationStore { return &DelegationStore{db: db} }
 
 func (s *DelegationStore) List(ctx context.Context, scope tenancy.TenantScope) ([]identity.DelegationGrant, error) {
 	rows, err := s.db.QueryContext(ctx, `

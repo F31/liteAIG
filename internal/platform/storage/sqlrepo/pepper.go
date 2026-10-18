@@ -9,9 +9,9 @@ import (
 )
 
 // PepperStore persists key peppers in the identity-owned tables.
-type PepperStore struct{ db *sql.DB }
+type PepperStore struct{ db DBTX }
 
-func NewPepperStore(db *sql.DB) *PepperStore { return &PepperStore{db: db} }
+func NewPepperStore(db DBTX) *PepperStore { return &PepperStore{db: db} }
 
 func (s *PepperStore) LoadCiphertext(ctx context.Context, version int) ([]byte, error) {
 	var ciphertext []byte

@@ -3,7 +3,6 @@ package sqlrepo
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"time"
 
@@ -17,11 +16,11 @@ import (
 // scope at a time, and a crashed process is handed back the lease once its
 // expiry passes.
 type CoordinationLeaseStore struct {
-	db    *sql.DB
+	db    DBTX
 	clock func() time.Time
 }
 
-func NewCoordinationLeaseStore(db *sql.DB, clock func() time.Time) *CoordinationLeaseStore {
+func NewCoordinationLeaseStore(db DBTX, clock func() time.Time) *CoordinationLeaseStore {
 	if clock == nil {
 		clock = time.Now
 	}

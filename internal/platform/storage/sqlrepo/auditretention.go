@@ -14,9 +14,9 @@ import (
 // expired audit events. Retention is opt-in: tenants without a policy keep
 // their trail forever, and the purge loop only considers tenants that opted
 // into a bounded window.
-type AuditRetentionRepository struct{ db *sql.DB }
+type AuditRetentionRepository struct{ db DBTX }
 
-func NewAuditRetentionRepository(db *sql.DB) *AuditRetentionRepository {
+func NewAuditRetentionRepository(db DBTX) *AuditRetentionRepository {
 	return &AuditRetentionRepository{db: db}
 }
 

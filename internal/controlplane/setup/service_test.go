@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,5 +84,22 @@ func TestBootstrapRejectsShortPassword(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("Bootstrap() error = %v", err)
+	}
+}
+
+// TestBootstrapInvalidInputIsDiagnostic pins the actionable reason so the
+// setup API can surface it instead of an opaque INVALID_REQUEST.
+func TestBootstrapInvalidInputIsDiagnostic(t *testing.T) {
+	service, err := NewService(Config{DefaultProjectName: "Starter", SettlementCurrency: "USD", MinimumPasswordSize: 8}, &fakeRepository{}, &fakeHasher{}, &sequenceIDs{}, &sequenceIDs{}, fixedClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Bootstrap(context.Background(), Input{Username: "admin", TenantName: "Example", Password: []byte("short")})
+	if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), "at least 8 characters") {
+		t.Fatalf("short password error = %v, want minimum-length diagnostic", err)
+	}
+	_, err = service.Bootstrap(context.Background(), Input{Password: []byte("long-enough")})
+	if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), "username") || !strings.Contains(err.Error(), "tenantName") {
+		t.Fatalf("missing-field error = %v, want field names", err)
 	}
 }

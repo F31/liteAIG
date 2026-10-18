@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/F31/liteAIG/internal/platform/storage/postgres/testutil"
+	"github.com/F31/liteAIG/internal/tenancy"
 	"github.com/F31/liteAIG/migrations"
 )
 
@@ -113,3 +115,50 @@ func TestRLSPlatformRoleBypassesForControlledOps(t *testing.T) {
 }
 
 var _ = sql.ErrNoRows
+
+func TestTenantRouterSelectsRLSPoolFromContext(t *testing.T) {
+	db, dsn := testutil.IsolatedDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	if err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	tenantA := "b3000000-0000-4000-8000-000000000001"
+	tenantB := "b3000000-0000-4000-8000-000000000002"
+	for _, id := range []string{tenantA, tenantB} {
+		if _, err := db.Exec(`INSERT INTO tenants(id, public_ref, name) VALUES ($1, $2, 'T')`, id, "ref-"+id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO projects(id, tenant_id, name) VALUES ($1, $2, 'P')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := EnableRLS(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableRLS(ctx, db); err != nil {
+		t.Fatalf("EnableRLS is not idempotent: %v", err)
+	}
+	router, err := NewTenantRouter(dsn, db, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Close()
+	tenantCtx := tenancy.WithTenant(ctx, tenantA)
+	var count int
+	if err := router.QueryRowContext(tenantCtx, `SELECT COUNT(*) FROM projects`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("tenant router sees %d projects, want 1", count)
+	}
+	if err := router.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("platform router sees %d projects, want 2", count)
+	}
+	if _, err := router.ExecContext(tenantCtx, `INSERT INTO projects(id, tenant_id, name) VALUES ($1, $2, 'X')`, "b3000000-0000-4000-8000-000000000003", tenantB); err == nil {
+		t.Fatal("tenant A was able to insert a project for tenant B under RLS")
+	}
+}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 // deterministic clock.
 func singletonTestDB(t *testing.T, name string) *sqlrepo.CoordinationLeaseStore {
 	t.Helper()
-	db, err := sqlite.Open(context.Background(), "file:singleton-"+name+"?mode=memory&cache=shared")
+	db, err := sqlite.Open(context.Background(), "file:"+filepath.Join(t.TempDir(), name+".db"))
 	if err != nil {
 		t.Fatal(err)
 	}

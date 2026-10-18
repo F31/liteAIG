@@ -12,9 +12,9 @@ import (
 )
 
 // OrganizationRepository implements the effective-dated organization contract.
-type OrganizationRepository struct{ db *sql.DB }
+type OrganizationRepository struct{ db DBTX }
 
-func NewOrganizationRepository(db *sql.DB) *OrganizationRepository {
+func NewOrganizationRepository(db DBTX) *OrganizationRepository {
 	return &OrganizationRepository{db: db}
 }
 

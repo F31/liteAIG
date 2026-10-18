@@ -41,6 +41,20 @@ func run(args []string, stdout, stderr io.Writer, signals ...<-chan struct{}) in
 	gatewayRPM := flags.Int("gateway-rpm", 0, "max gateway requests per tenant+project per minute (default 600)")
 	gatewayBurst := flags.Int("gateway-burst", 0, "gateway token-bucket burst (default: equal to --gateway-rpm)")
 	gatewayTPM := flags.Int64("gateway-tpm", 0, "max tokens per tenant+project per minute (0 disables TPM metering)")
+	gatewayMaxBodyBytes := flags.Int64("gateway-max-body-bytes", 0, "max inbound data-plane request body bytes (default 1 MiB; raise for audio/vision/files)")
+	semanticCacheCapacity := flags.Int("semantic-cache-capacity", 0, "max vectors in the in-process semantic cache (default 1024)")
+	semanticCacheTTL := flags.Duration("semantic-cache-ttl", 0, "semantic vector TTL; 0 keeps vectors until evicted")
+	exactCacheCapacity := flags.Int("exact-cache-capacity", 0, "max entries in the in-process exact cache (default 64; ignored with --coordinator)")
+	attemptTimeout := flags.Duration("attempt-timeout", 0, "non-streaming per-attempt timeout (default 120s)")
+	totalTimeout := flags.Duration("total-timeout", 0, "non-streaming total timeout across retries (default 300s)")
+	streamTotalTimeout := flags.Duration("stream-total-timeout", 0, "overall streaming timeout; 0 means no overall deadline (default 0)")
+	streamIdleTimeout := flags.Duration("stream-idle-timeout", 0, "max gap between streaming chunks (default 60s)")
+	firstTokenTimeout := flags.Duration("first-token-timeout", 0, "max wait for the first streaming chunk before failover (default 30s)")
+	providerTimeout := flags.Duration("provider-timeout", 0, "non-streaming upstream provider timeout (default 120s)")
+	externalGuardrailURL := flags.String("external-guardrail-url", "", "external content-safety endpoint for the streaming shadow guard; empty disables Layer 3")
+	externalGuardrailToken := flags.String("external-guardrail-token", "", "bearer token for the external guardrail endpoint")
+	externalGuardrailTimeout := flags.Duration("external-guardrail-timeout", 0, "external guardrail request timeout (default 2s)")
+	externalGuardrailFailMode := flags.String("external-guardrail-fail-mode", "fail_open", "external guardrail outage behavior: fail_open, fail_closed, or bypass")
 	// RuntimeBundle delivery (Stage 11): the Control Plane signs every published
 	// snapshot; split mode=gateway processes pull signed bundles from a remote
 	// Control Plane over the authenticated endpoint.
@@ -51,6 +65,10 @@ func run(args []string, stdout, stderr io.Writer, signals ...<-chan struct{}) in
 	coordinatorURL := flags.String("coordinator", "", "Redis/Valkey coordinator URL (redis://host:port/db) for Standard tier budget ledger, concurrency leases, and inflight counters; empty keeps the in-memory Lite implementations")
 	egressAllowCIDRs := flags.String("egress-allow-cidrs", "", "comma-separated private/internal networks reachable by upstream connectors (self-hosted Kubernetes in-cluster providers); all other SSRF guardrails stay enabled")
 	dbDsn := flags.String("db", "", "SQLite DSN for the Lite management plane (empty disables the management plane)")
+	postgresRLS := flags.Bool("postgres-rls", true, "enable PostgreSQL row-level security and tenant-scoped connection pools; set false only for controlled rollback")
+	postgresTenantPools := flags.Int("postgres-tenant-pools", 16, "max lazy per-tenant Postgres connection pools (2 connections each); size against max_connections")
+	minPasswordSize := flags.Int("min-password-size", 0, "minimum admin/console password length for setup and password reset (default 8); lowering it weakens security and is intended for local development only")
+	cookieSecure := flags.Bool("cookie-secure", true, "set the Secure flag on the admin session cookie (requires HTTPS); set to false for plain-HTTP local development")
 	oidcIssuer := flags.String("oidc-issuer", "", "OIDC issuer URL for SSO; empty keeps local login only (JWKS is fetched from <issuer>/.well-known/jwks.json)")
 	oidcClientID := flags.String("oidc-client-id", "", "OIDC public client id")
 	oidcAudience := flags.String("oidc-audience", "", "expected id_token audience (default: client id)")
@@ -173,27 +191,45 @@ func run(args []string, stdout, stderr io.Writer, signals ...<-chan struct{}) in
 			signer = parsed
 		}
 		lite, composeErr = app.NewLite(context.Background(), app.LiteOptions{
-			DSN:                 *dbDsn,
-			AdminAddr:           *adminAddr,
-			GatewayAddr:         *gatewayAddr,
-			BaseURL:             publicBaseURL(*gatewayAddr),
-			Lifecycle:           lifecycle,
-			OIDC:                oidcOptions,
-			Analytics:           analyticsOptions,
-			WebhookURL:          *webhookURL,
-			Mail:                mailOptions,
-			OTLPTracesEndpoint:  *otlpTracesEndpoint,
-			OTLPMetricsEndpoint: *otlpMetricsEndpoint,
-			OTLPLogsEndpoint:    *otlpLogsEndpoint,
-			GatewayRPM:          *gatewayRPM,
-			GatewayBurst:        *gatewayBurst,
-			GatewayTPM:          *gatewayTPM,
-			BundleSigner:        signer,
-			BundleToken:         *bundleToken,
-			ControlURL:          *controlURL,
-			BundlePublicKeyHex:  *bundlePublicKey,
-			CoordinatorURL:      *coordinatorURL,
-			EgressAllowCIDRs:    splitCommaList(*egressAllowCIDRs),
+			DSN:                       *dbDsn,
+			PostgresRLS:               postgresRLS,
+			PostgresTenantPools:       *postgresTenantPools,
+			AdminAddr:                 *adminAddr,
+			GatewayAddr:               *gatewayAddr,
+			BaseURL:                   publicBaseURL(*gatewayAddr),
+			Lifecycle:                 lifecycle,
+			OIDC:                      oidcOptions,
+			Analytics:                 analyticsOptions,
+			WebhookURL:                *webhookURL,
+			Mail:                      mailOptions,
+			OTLPTracesEndpoint:        *otlpTracesEndpoint,
+			OTLPMetricsEndpoint:       *otlpMetricsEndpoint,
+			OTLPLogsEndpoint:          *otlpLogsEndpoint,
+			GatewayRPM:                *gatewayRPM,
+			GatewayBurst:              *gatewayBurst,
+			GatewayTPM:                *gatewayTPM,
+			GatewayMaxBodyBytes:       *gatewayMaxBodyBytes,
+			SemanticCacheCapacity:     *semanticCacheCapacity,
+			SemanticCacheTTL:          *semanticCacheTTL,
+			ExactCacheCapacity:        *exactCacheCapacity,
+			AttemptTimeout:            *attemptTimeout,
+			TotalTimeout:              *totalTimeout,
+			StreamTotalTimeout:        *streamTotalTimeout,
+			StreamIdleTimeout:         *streamIdleTimeout,
+			FirstTokenTimeout:         *firstTokenTimeout,
+			ProviderTimeout:           *providerTimeout,
+			ExternalGuardrailURL:      *externalGuardrailURL,
+			ExternalGuardrailToken:    *externalGuardrailToken,
+			ExternalGuardrailTimeout:  *externalGuardrailTimeout,
+			ExternalGuardrailFailMode: *externalGuardrailFailMode,
+			BundleSigner:              signer,
+			BundleToken:               *bundleToken,
+			ControlURL:                *controlURL,
+			BundlePublicKeyHex:        *bundlePublicKey,
+			CoordinatorURL:            *coordinatorURL,
+			EgressAllowCIDRs:          splitCommaList(*egressAllowCIDRs),
+			MinPasswordSize:           *minPasswordSize,
+			CookieSecure:              cookieSecure,
 		})
 		if composeErr != nil {
 			fmt.Fprintln(stderr, "lite:", composeErr)

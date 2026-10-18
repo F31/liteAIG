@@ -11,9 +11,9 @@ import (
 )
 
 // ApprovalStore is the SQL persistence for approval requests.
-type ApprovalStore struct{ db *sql.DB }
+type ApprovalStore struct{ db DBTX }
 
-func NewApprovalStore(db *sql.DB) *ApprovalStore { return &ApprovalStore{db: db} }
+func NewApprovalStore(db DBTX) *ApprovalStore { return &ApprovalStore{db: db} }
 
 func (s *ApprovalStore) Create(ctx context.Context, scope tenancy.TenantScope, request approval.Request) error {
 	if request.TenantID != scope.TenantID {

@@ -41,9 +41,9 @@ type A2ATask struct {
 }
 
 // A2ATaskStore persists tenant-scoped durable A2A task state.
-type A2ATaskStore struct{ db *sql.DB }
+type A2ATaskStore struct{ db DBTX }
 
-func NewA2ATaskStore(db *sql.DB) *A2ATaskStore { return &A2ATaskStore{db: db} }
+func NewA2ATaskStore(db DBTX) *A2ATaskStore { return &A2ATaskStore{db: db} }
 
 // Create records a pending task. A task already holding the idempotency key
 // (within the tenant) wins and the insert is a no-op, so concurrent identical

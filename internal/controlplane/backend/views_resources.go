@@ -135,11 +135,13 @@ type CredentialResource struct {
 }
 
 type DeploymentResource struct {
-	ID         string `json:"id"`
-	ProviderID string `json:"providerId"`
-	Model      string `json:"model"`
-	Region     string `json:"region"`
-	Status     string `json:"status"`
+	ID            string   `json:"id"`
+	ProviderID    string   `json:"providerId"`
+	Model         string   `json:"model"`
+	Region        string   `json:"region"`
+	Status        string   `json:"status"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+	ContextWindow int      `json:"contextWindow,omitempty"`
 }
 
 type GuardrailGroundingView struct {

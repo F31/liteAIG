@@ -76,6 +76,7 @@
   "simulator": "路由模拟器",
   "model": "逻辑模型",
   "projectId": "项目 ID",
+  "requiredCapabilities": "所需能力",
   "latency": "延迟",
   "cost": "成本",
   "load": "负载",

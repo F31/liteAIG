@@ -33,6 +33,99 @@ export const providerEndpointDefaults: Record<string, string> = {
   "openai-compatible": "",
 };
 
+// Canonical model capability vocabulary. Keep in sync with the backend
+// vocabulary in internal/controlplane/config/capabilities.go.
+export const CANONICAL_CAPABILITIES = [
+  "chat",
+  "vision",
+  "reasoning",
+  "tools",
+  "embedding",
+  "rerank",
+  "audio",
+  "speech",
+] as const;
+
+const CAPABILITY_ALIASES: Record<string, string> = {
+  embeddings: "embedding",
+  embed: "embedding",
+  multimodal: "vision",
+  vlm: "vision",
+  "vision-language": "vision",
+  image: "vision",
+  function_calling: "tools",
+  "function-calling": "tools",
+  tool_calling: "tools",
+  "tool-calling": "tools",
+  stt: "audio",
+  transcription: "audio",
+  translation: "audio",
+  asr: "audio",
+  tts: "speech",
+  "text-to-speech": "speech",
+  "speech-synthesis": "speech",
+};
+
+// normalizeCapability maps legacy/synonym tokens onto the canonical vocabulary.
+export const normalizeCapability = (value: string): string => {
+  const token = value.trim().toLowerCase();
+  return CAPABILITY_ALIASES[token] ?? token;
+};
+
+// canonicalCapabilities normalizes, de-duplicates and drops empty capability
+// tokens (mirroring the backend canonicalizer) for draft diffing.
+export const canonicalCapabilities = (
+  values: unknown,
+): string[] | undefined => {
+  if (!Array.isArray(values)) return undefined;
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = normalizeCapability(String(raw));
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out.length > 0 ? out : undefined;
+};
+
+export const capabilityOptions = (t: (key: string) => string) =>
+  CANONICAL_CAPABILITIES.map((value) => ({
+    value,
+    label: t(`resources.capability_${value}`),
+  }));
+
+export const capabilityLabel = (
+  t: (key: string) => string,
+  value: string,
+): string => {
+  const canonical = normalizeCapability(value);
+  const option = capabilityOptions(t).find((item) => item.value === canonical);
+  return option?.label ?? value;
+};
+
+// capabilityColor gives each capability family a distinct, stable tag color so
+// speech/vision/audio deployments are visually distinguishable at a glance.
+export const capabilityColor = (value: string): string => {
+  switch (normalizeCapability(value)) {
+    case "chat":
+      return "default";
+    case "vision":
+      return "purple";
+    case "reasoning":
+      return "gold";
+    case "tools":
+      return "geekblue";
+    case "embedding":
+      return "green";
+    case "rerank":
+      return "orange";
+    case "audio":
+      return "blue";
+    case "speech":
+      return "cyan";
+    default:
+      return "default";
+  }
+};
+
 export type DraftRowState = "new" | "modified" | "deleted" | "unchanged";
 
 // Maps a UI resource key to its draft-config collection name.
@@ -61,7 +154,7 @@ export const DRAFT_FIELD_PICKERS: Record<
     credential_id: d.credential_id ?? d.credentialId,
     upstream_model: d.upstream_model ?? d.model,
     data_region: d.data_region ?? d.region,
-    capabilities: nonEmptyArray(d.capabilities),
+    capabilities: canonicalCapabilities(d.capabilities),
     context_window: d.context_window ?? d.contextWindow,
     priority: d.priority,
     status: activeStatus(d.status),

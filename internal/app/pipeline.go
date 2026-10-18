@@ -10,6 +10,7 @@ import (
 
 	"github.com/F31/liteAIG/internal/cache"
 	"github.com/F31/liteAIG/internal/contextguard"
+	controlconfig "github.com/F31/liteAIG/internal/controlplane/config"
 	"github.com/F31/liteAIG/internal/finops/accounting"
 	"github.com/F31/liteAIG/internal/finops/budget"
 	"github.com/F31/liteAIG/internal/finops/pricing"
@@ -37,6 +38,7 @@ import (
 	"github.com/F31/liteAIG/internal/resilience/leasegate"
 	"github.com/F31/liteAIG/internal/resilience/retry"
 	routing "github.com/F31/liteAIG/internal/routing/model"
+	"github.com/F31/liteAIG/internal/tenancy"
 	"github.com/F31/liteAIG/internal/tokenizer"
 )
 
@@ -54,12 +56,14 @@ type litePipeline struct {
 	judge              *snapshotJudge
 	approvals          gatewayapproval.Handler
 	guardrails         *builtin.Engine
+	externalGuardrail  guardraildomain.ExternalProvider
+	externalFailMode   guardraildomain.ExternalFailMode
 	accounting         accounting.Repository
 	budget             *budgetEnforcer
-	limiter            *rate.Limiter
+	limiter            rate.RPM
 	ratePolicy         rate.Policy
 	tokenizer          *tokenizer.Registry
-	tpm                *rate.Meter
+	tpm                rate.TPM
 	contextGuard       *contextguard.Guard
 	contextStrict      bool
 	metrics            *routingMetrics
@@ -107,6 +111,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 	if request == nil || request.Request == nil || request.Snapshot == nil {
 		return errors.New("lite pipeline requires a complete request context")
 	}
+	ctx = tenancy.WithTenant(ctx, request.TenantID())
 	if p.tracer != nil {
 		var span observability.RequestSpan
 		ctx, span = p.tracer.Start(ctx, request, "liteaig.pipeline")
@@ -168,7 +173,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 			return (gatewaycache.SemanticHandler{
 				Store:     p.semantic,
 				Exact:     p.store,
-				Embedder:  &boundSemanticEmbedder{inner: p.embedder, snapshot: req.Snapshot, model: policy.Semantic.Model},
+				Embedder:  &boundSemanticEmbedder{inner: p.embedder, snapshot: req.Snapshot, request: req, model: policy.Semantic.Model},
 				Threshold: policy.Semantic.Threshold,
 			}).Handle(ctx, req)
 		}
@@ -207,11 +212,14 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 	})
 	executionStage := pipeline.HandlerFunc(func(ctx context.Context, req *kernel.RequestContext) (pipeline.Directive, error) {
 		var err error
+		var ttft time.Duration
 		if req.Request.Stream && req.StreamWriter != nil {
 			streamGuard := p.streamGuardFor(req)
-			collector := newStreamCollector(req.StreamWriter, streamGuard)
+			collector := newStreamCollector(req.StreamWriter, streamGuard, started)
 			attempts, err := p.executor.ExecuteStream(ctx, plan, req.Snapshot, req.Request, collector)
 			if err != nil {
+				req.Latency = p.clock.Now().Sub(started)
+				req.TTFT = collector.TTFT()
 				return pipeline.Continue, err
 			}
 			result = &execution.Result{Attempts: attempts}
@@ -222,6 +230,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 			if req.Response != nil {
 				req.Usage = &req.Response.Usage
 			}
+			ttft = collector.TTFT()
 		} else {
 			result, err = p.executor.ExecuteWithPool(ctx, plan, req.Snapshot, req.Request, func(deployment runtime.Deployment) (execution.CredentialPicker, error) {
 				state := credentialpool.NewSnapshotState(req.Snapshot, deployment.ID)
@@ -242,6 +251,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 				return pool.NewPicker(req.RequestID)
 			})
 			if err != nil {
+				req.Latency = p.clock.Now().Sub(started)
 				return pipeline.Continue, err
 			}
 			req.Response = result.Response
@@ -251,6 +261,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 			}
 		}
 		req.Latency = p.clock.Now().Sub(started)
+		req.TTFT = ttft
 		if req.SelectedDeploymentID != "" && p.metrics != nil {
 			p.metrics.begin(req.SelectedDeploymentID)
 		}
@@ -260,7 +271,7 @@ func (p *litePipeline) Run(ctx context.Context, request *kernel.RequestContext) 
 		handler := guardrail.Handler{Engine: p.guardrails, Output: true, Sink: p.events, IDs: p.ids, Clock: p.clock}
 		if policy := req.Snapshot.GuardrailPolicy(); policy.Judge.Enabled || policy.Groundedness.Enabled {
 			handler.Groundedness = p.groundednessFor(policy)
-			handler.Judge = p.judgeFor(req.Snapshot, policy)
+			handler.Judge = p.judgeFor(req, policy)
 			if action := policy.Judge.Action; action != "" {
 				handler.Action = action
 			}
@@ -341,11 +352,27 @@ func requiredCapabilities(request *interaction.UnifiedRequest) []string {
 	if request == nil {
 		return nil
 	}
+	// Image-bearing chat/responses are multimodal: only deployments that
+	// declare vision may serve them, otherwise text-only models would be
+	// selected and the provider call would fail.
+	if request.HasImages() {
+		return []string{controlconfig.CapabilityVision}
+	}
 	if request.Kind == interaction.RequestRerank {
-		return []string{"rerank"}
+		return []string{controlconfig.CapabilityRerank}
+	}
+	// A data-plane embedding request must reach an embedding-capable
+	// deployment. The auxiliary semantic-cache embedder does not use this path
+	// (it prefers then falls back in capabilityDeployment), so this constraint
+	// does not affect cache lookups.
+	if request.Kind == interaction.RequestEmbedding {
+		return []string{controlconfig.CapabilityEmbedding}
 	}
 	if request.Kind == interaction.RequestAudio {
-		return []string{"audio"}
+		if request.Audio != nil && request.Audio.Operation == interaction.AudioSpeech {
+			return []string{controlconfig.CapabilitySpeech}
+		}
+		return []string{controlconfig.CapabilityAudio}
 	}
 	if request.Kind == interaction.RequestBatch || request.Kind == interaction.RequestFile {
 		return []string{"batch"}
@@ -364,11 +391,11 @@ func (p *litePipeline) groundednessFor(policy runtime.GuardrailPolicy) groundedn
 
 // judgeFor builds a bound LLM judge from the compiled policy (nil when the
 // checkpoint is disabled or no resolver is available).
-func (p *litePipeline) judgeFor(snapshot *runtime.TenantRuntimeSnapshot, policy runtime.GuardrailPolicy) judge.Judge {
-	if !policy.Judge.Enabled || p.judge == nil {
+func (p *litePipeline) judgeFor(request *kernel.RequestContext, policy runtime.GuardrailPolicy) judge.Judge {
+	if !policy.Judge.Enabled || p.judge == nil || request == nil {
 		return nil
 	}
-	return &boundJudge{inner: p.judge, snapshot: snapshot, model: policy.Judge.Model}
+	return &boundJudge{inner: p.judge, snapshot: request.Snapshot, request: request, model: policy.Judge.Model}
 }
 
 // admitTool applies the request-level admission stages (rate limit + budget
@@ -404,6 +431,8 @@ type usageFacts struct {
 	// providerCost, when set, is billed to the tenant in providerCurrency.
 	providerCost     *float64
 	providerCurrency string
+	providerID       string
+	ttft             time.Duration
 }
 
 // recordUsage builds the immutable accounting facts, runs the finalizer and
@@ -459,11 +488,88 @@ func (p *litePipeline) recordUsage(ctx context.Context, request *kernel.RequestC
 	if p.live != nil {
 		p.live.PublishLive(contracts.LiveEvent{RequestID: request.RequestID, Outcome: value.Outcome, DeploymentID: value.DeploymentID, LatencyMS: value.LatencyMS})
 	}
-	p.recordOperationalMetrics(value)
+	p.recordOperationalMetrics(value, facts.providerID, facts.ttft)
 	return nil
 }
 
-func (p *litePipeline) recordOperationalMetrics(value accounting.Facts) {
+// reserveAuxiliary reserves budget for an auxiliary provider call using the
+// same tenant/project/key policy as the parent request. A nil/zero reservation
+// means the tenant has no matching budget policy.
+func (p *litePipeline) reserveAuxiliary(request *kernel.RequestContext, estimated int64) (string, string, int64, error) {
+	if p == nil || p.budget == nil || request == nil || request.Snapshot == nil {
+		return "", "", 0, nil
+	}
+	policy, ok := budgetPolicyFor(request, p.clock.Now())
+	if !ok {
+		return "", "", 0, nil
+	}
+	if estimated <= 0 {
+		estimated = 1
+	}
+	id, err := p.ids.New()
+	if err != nil {
+		return "", "", 0, err
+	}
+	reserved, err := p.budget.Reserve(policy, id, estimated)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return reserved.PolicyID, reserved.ID, reserved.EstimatedTokens, nil
+}
+
+// recordAuxiliaryUsage persists a separate usage/request record for an
+// auxiliary provider call (semantic-cache embedding or LLM judge) and links it
+// to the parent request. It is deliberately independent of the parent's
+// reservation: the parent already settled its budget, while this record keeps
+// FinOps and provider-cost visibility complete.
+func (p *litePipeline) recordAuxiliaryUsage(ctx context.Context, request *kernel.RequestContext, kind, model, deploymentID string, usage interaction.UnifiedUsage, latency time.Duration, policyID, reservationID string, estimated int64, callErr error) {
+	if request == nil || request.Snapshot == nil || request.Request == nil {
+		return
+	}
+	outcome := "success"
+	if callErr != nil {
+		outcome = "error"
+	}
+	recordAuxiliaryCall(kind, outcome, usage.TotalTokens())
+	id, err := p.ids.New()
+	if err != nil {
+		if reservationID != "" && p.budget != nil {
+			_ = p.budget.Release(policyID, reservationID)
+		}
+		return
+	}
+	now := p.clock.Now()
+	facts := accounting.Facts{
+		UsageEventID: id, RequestID: id, ParentRequestID: request.RequestID,
+		TenantID: request.TenantID(), ProjectID: request.ProjectID(), KeyID: request.Key.ID,
+		LogicalModel: model, DeploymentID: deploymentID, Outcome: outcome,
+		UsageSource: "auxiliary_" + kind, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		LatencyMS: latency.Milliseconds(), SnapshotVersion: request.SnapshotVersion(),
+		SecurityEpoch: request.Snapshot.SecurityEpoch, ReceivedAt: now.Add(-latency), CompletedAt: now,
+		BudgetPolicyID: policyID, ReservationID: reservationID,
+	}
+	if callErr == nil {
+		actual := usage.TotalTokens()
+		facts.ActualTokens = &actual
+	}
+	if deployment, ok := request.Snapshot.Deployment(deploymentID); ok {
+		if cost, priceErr := pricing.PriceCached(pricing.LiteReferencePriceVersion, deployment.UpstreamModel, "USD", usage.InputTokens, usage.OutputTokens, 0, 0); priceErr == nil {
+			facts.ProviderCost = &cost
+			facts.ProviderCurrency = "USD"
+		}
+	}
+	finalizer, finalizeErr := accounting.NewFinalizer(accounting.FinalizerConfig{Timeout: 5 * time.Second}, p.accounting, p.budget, nil, facts)
+	if finalizeErr != nil {
+		if reservationID != "" && p.budget != nil {
+			_ = p.budget.Release(policyID, reservationID)
+		}
+		return
+	}
+	_, _ = finalizer.Finalize(context.WithoutCancel(ctx))
+}
+
+func (p *litePipeline) recordOperationalMetrics(value accounting.Facts, providerID string, ttft time.Duration) {
+	recordProcessMetrics(providerID, value.Outcome, time.Duration(value.LatencyMS)*time.Millisecond, ttft)
 	if p.metricSink == nil {
 		return
 	}
@@ -666,6 +772,9 @@ func estimateTokensWith(request *interaction.UnifiedRequest, registry *tokenizer
 			estimate += estimateFor(registry, model, len(input))
 		}
 	}
+	if request.Audio != nil {
+		estimate += estimateFor(registry, model, len(request.Audio.Input)+len(request.Audio.Prompt)+len(request.Audio.Language))
+	}
 	if request.Tool != nil {
 		estimate += estimateFor(registry, model, len(request.Tool.Name)+len(strings.TrimSpace(string(request.Tool.Arguments))))
 	}
@@ -693,11 +802,12 @@ func (p *litePipeline) finalize(ctx context.Context, request *kernel.RequestCont
 		outcome: "success", usageSource: usageSource(request.Source, "playground"),
 		inputTokens: inputTokens, outputTokens: outputTokens,
 		retries: retries, fallbacks: fallbacks,
-		latency:  request.Latency,
+		latency: request.Latency, ttft: request.TTFT,
 		attempts: attempts, routeEvidence: routeEvidenceFromPlan(plan),
 		settle: true,
 	}
 	if deployment, ok := request.Snapshot.Deployment(request.SelectedDeploymentID); ok {
+		facts.providerID = deployment.ProviderID
 		cacheRead, cacheWrite := int64(0), int64(0)
 		if request.Usage != nil {
 			cacheRead, cacheWrite = request.Usage.CacheReadTokens, request.Usage.CacheWriteTokens
@@ -733,15 +843,17 @@ func (p *litePipeline) streamGuardFor(request *kernel.RequestContext) *guardrail
 		return nil
 	}
 	return guardrail.NewStreamGuard(guardrail.StreamGuardConfig{
-		Engine:          engine,
-		SecurityEvents:  nil,
-		Sink:            p.events,
-		IDs:             p.ids,
-		Clock:           p.clock,
-		TenantID:        request.TenantID(),
-		ProjectID:       request.ProjectID(),
-		RequestID:       request.RequestID,
-		SnapshotVersion: request.SnapshotVersion(),
+		Engine:           engine,
+		External:         p.externalGuardrail,
+		ExternalFailMode: p.externalFailMode,
+		SecurityEvents:   nil,
+		Sink:             p.events,
+		IDs:              p.ids,
+		Clock:            p.clock,
+		TenantID:         request.TenantID(),
+		ProjectID:        request.ProjectID(),
+		RequestID:        request.RequestID,
+		SnapshotVersion:  request.SnapshotVersion(),
 	})
 }
 
@@ -815,12 +927,16 @@ func (p *litePipeline) recordRoutingMetrics(request *kernel.RequestContext, succ
 
 func (p *litePipeline) finalizeFailure(ctx context.Context, request *kernel.RequestContext, plan *routing.RoutePlan, result *execution.Result, cause error) error {
 	attempts, _, _ := attemptsFromResult(result)
-	return p.recordUsage(ctx, request, usageFacts{
+	facts := usageFacts{
 		logicalModel: request.Request.Model, deploymentID: request.SelectedDeploymentID,
 		outcome: outcomeForError(cause), usageSource: usageSource(request.Source, "playground"),
-		latency:  request.Latency,
+		latency: request.Latency, ttft: request.TTFT,
 		attempts: attempts, routeEvidence: routeEvidenceFromPlan(plan),
-	})
+	}
+	if deployment, ok := request.Snapshot.Deployment(request.SelectedDeploymentID); ok {
+		facts.providerID = deployment.ProviderID
+	}
+	return p.recordUsage(ctx, request, facts)
 }
 
 func outcomeForError(err error) string {
@@ -910,7 +1026,7 @@ func estimateContextTokensWith(request *interaction.UnifiedRequest, registry *to
 			chars += len(document)
 		}
 	case request.Audio != nil:
-		chars += len(request.Audio.Data) + len(request.Audio.Prompt) + len(request.Audio.Language)
+		chars += len(request.Audio.Data) + len(request.Audio.Prompt) + len(request.Audio.Language) + len(request.Audio.Input) + len(request.Audio.Instructions)
 	case request.Batch != nil:
 		chars += len(request.Batch.InputFileID) + len(request.Batch.Endpoint) + len(request.Batch.CompletionWindow)
 	case request.File != nil:
@@ -926,7 +1042,7 @@ func estimateContextTokensWith(request *interaction.UnifiedRequest, registry *to
 // runtime snapshot), and a bounded retry policy. When coord is non-nil its
 // distributed primitives (leases, ledger) are used in place of the in-process
 // memory ones, so Standard tier coordinates budget and concurrency over Redis.
-func newLitePipeline(accountingRepo accounting.Repository, live contracts.TelemetrySink, ids contracts.IDGenerator, clock contracts.Clock, client *http.Client, secretProvider secrets.Provider, appPolicy egress.Policy, settlementCurrency func(ctx context.Context, tenantID string) (string, error), streams *StreamRegistry, approvals gatewayapproval.Handler, events contracts.EventSink, ratePolicy rate.Policy, gatewayTPM int64, probeFn probeFunc, coord *coordinatorDeps) (*litePipeline, error) {
+func newLitePipeline(accountingRepo accounting.Repository, live contracts.TelemetrySink, ids contracts.IDGenerator, clock contracts.Clock, client *http.Client, secretProvider secrets.Provider, appPolicy egress.Policy, settlementCurrency func(ctx context.Context, tenantID string) (string, error), streams *StreamRegistry, approvals gatewayapproval.Handler, events contracts.EventSink, ratePolicy rate.Policy, gatewayTPM int64, probeFn probeFunc, coord *coordinatorDeps, execPolicy retry.Policy) (*litePipeline, error) {
 	engine, err := builtin.New(builtin.Policy{})
 	if err != nil {
 		return nil, err
@@ -936,7 +1052,10 @@ func newLitePipeline(accountingRepo accounting.Repository, live contracts.Teleme
 	} else if ratePolicy.Burst <= 0 {
 		ratePolicy.Burst = ratePolicy.RequestsPerMinute
 	}
-	policy := retry.DefaultPolicy()
+	policy := execPolicy
+	if policy.MaxTotalCalls <= 0 {
+		policy = retry.DefaultPolicy()
+	}
 	policy.BaseBackoff = time.Millisecond
 	breaker := circuit.New(circuit.DefaultConfig(), clock)
 	var leaseCoordinator coordination.LeaseCoordinator = coordination.NewMemoryLeaseCoordinator(clock.Now)
@@ -948,8 +1067,15 @@ func newLitePipeline(accountingRepo accounting.Repository, live contracts.Teleme
 	if coord != nil && coord.inflight != nil {
 		inflightCounter = coord.inflight
 	}
-	resolver := newProviderResolver(client, secretProvider, appPolicy)
+	resolver := newProviderResolver(client, secretProvider, appPolicy).WithTimeout(policy.ProviderTimeout)
 	executor := execution.New(policy, resolver, breaker, retry.TimerSleeper{}, func() time.Duration { return 0 }).WithLeases(leases)
+	var limiter rate.RPM = rate.New(clock)
+	var tpm rate.TPM = rate.NewMeter(clock, func(_, _ string) int64 { return gatewayTPM })
+	if coord != nil && coord.client != nil {
+		// Standard tier: enforce RPM/TPM across gateway replicas via Redis.
+		limiter = rate.NewRedisLimiter(coord.client, clock.Now)
+		tpm = rate.NewRedisMeter(coord.client, clock.Now, func(_, _ string) int64 { return gatewayTPM })
+	}
 	if inflightCounter != nil {
 		executor = executor.WithInflight(inflightCounter)
 	}
@@ -957,10 +1083,16 @@ func newLitePipeline(accountingRepo accounting.Repository, live contracts.Teleme
 	if coord != nil && coord.ledger != nil {
 		budgetEnforcer = budgetEnforcer.withDistributedLedger(coord.ledger, clock, coord.alerts)
 	}
-	return &litePipeline{
+	var exactStore cache.Store = cache.NewMemoryStore(cache.MemoryConfig{Capacity: 64})
+	if coord != nil && coord.client != nil {
+		// Standard tier: share the exact cache across gateway replicas. The
+		// per-entry TTL from the tenant cache policy still applies.
+		exactStore = cache.NewRedisStore(coord.client, time.Hour)
+	}
+	value := &litePipeline{
 		planner:            &routing.Planner{},
 		executor:           executor,
-		store:              cache.NewMemoryStore(cache.MemoryConfig{Capacity: 64}),
+		store:              exactStore,
 		semantic:           cache.NewMemorySemanticStore(),
 		embedder:           &snapshotEmbedder{resolver: resolver},
 		judge:              &snapshotJudge{resolver: resolver},
@@ -968,10 +1100,10 @@ func newLitePipeline(accountingRepo accounting.Repository, live contracts.Teleme
 		guardrails:         engine,
 		accounting:         accountingRepo,
 		budget:             budgetEnforcer,
-		limiter:            rate.New(clock),
+		limiter:            limiter,
 		ratePolicy:         ratePolicy,
 		tokenizer:          tokenizer.New(),
-		tpm:                rate.NewMeter(clock, func(_, _ string) int64 { return gatewayTPM }),
+		tpm:                tpm,
 		contextGuard:       contextguard.New(tokenizer.New(), true),
 		contextStrict:      true,
 		metrics:            newRoutingMetrics(clock),
@@ -985,5 +1117,10 @@ func newLitePipeline(accountingRepo accounting.Repository, live contracts.Teleme
 		ids:                ids,
 		clock:              clock,
 		settlementCurrency: settlementCurrency,
-	}, nil
+	}
+	value.embedder.record = value.recordAuxiliaryUsage
+	value.embedder.reserve = value.reserveAuxiliary
+	value.judge.record = value.recordAuxiliaryUsage
+	value.judge.reserve = value.reserveAuxiliary
+	return value, nil
 }

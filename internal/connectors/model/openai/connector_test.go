@@ -128,6 +128,58 @@ func TestInvokeAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestInvokeAudioTranslation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/audio/translations" {
+			t.Fatalf("path=%s", request.URL.Path)
+		}
+		if err := request.ParseMultipartForm(1024); err != nil {
+			t.Fatal(err)
+		}
+		if request.FormValue("model") != "whisper-1" {
+			t.Fatalf("form=%v", request.Form)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		response.Write([]byte(`{"text":"translated"}`))
+	}))
+	defer server.Close()
+	request := &interaction.UnifiedRequest{Kind: interaction.RequestAudio, Model: "whisper-1", Audio: &interaction.AudioPayload{
+		Operation: interaction.AudioTranslation, Filename: "sample.wav", MediaType: "audio/wav", Data: []byte("audio-bytes"),
+	}}
+	result, err := connectorFor(t, server, time.Second).Invoke(context.Background(), contracts.InvocationRequest{Request: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response.Audio.Text != "translated" {
+		t.Fatalf("response=%+v", result.Response)
+	}
+}
+
+func TestInvokeAudioSpeech(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/audio/speech" {
+			t.Fatalf("path=%s", request.URL.Path)
+		}
+		body, _ := io.ReadAll(request.Body)
+		if !strings.Contains(string(body), `"input":"hello"`) || !strings.Contains(string(body), `"voice":"alloy"`) {
+			t.Fatalf("body=%s", body)
+		}
+		response.Header().Set("Content-Type", "audio/mpeg")
+		response.Write([]byte("mp3-bytes"))
+	}))
+	defer server.Close()
+	request := &interaction.UnifiedRequest{Kind: interaction.RequestAudio, Model: "tts-1", Audio: &interaction.AudioPayload{
+		Operation: interaction.AudioSpeech, Input: "hello", Voice: "alloy", ResponseFormat: "mp3",
+	}}
+	result, err := connectorFor(t, server, time.Second).Invoke(context.Background(), contracts.InvocationRequest{Request: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response.Audio == nil || string(result.Response.Audio.Data) != "mp3-bytes" || result.Response.Audio.ContentType != "audio/mpeg" || string(result.Response.RawContent) != "mp3-bytes" {
+		t.Fatalf("response=%+v", result.Response)
+	}
+}
+
 func TestInvokeBatchCreate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/batches" {
@@ -338,6 +390,24 @@ func TestStreamAndDrop(t *testing.T) {
 		t.Fatalf("dropped Stream() error=%v", err)
 	}
 }
+
+// Streaming must not inherit the non-streaming RequestTimeout: a provider may
+// take longer than that budget before its first event or between events.
+func TestStreamIsNotCutByRequestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	output := &writer{}
+	if err := connectorFor(t, server, 10*time.Millisecond).Stream(context.Background(), contracts.InvocationRequest{Request: chatRequest()}, output); err != nil {
+		t.Fatalf("Stream() error=%v", err)
+	}
+	if len(output.events) < 2 {
+		t.Fatalf("events=%+v", output.events)
+	}
+}
+
 func TestOpenAICompatibleCustomPath(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

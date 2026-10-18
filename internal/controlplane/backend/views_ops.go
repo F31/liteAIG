@@ -131,6 +131,7 @@ type AuditRecord = audit.Record
 
 type FinOpsProjectRow struct {
 	ProjectID           string  `json:"projectId"`
+	ProjectName         string  `json:"projectName"`
 	Requests            int64   `json:"requests"`
 	InputTokens         int64   `json:"inputTokens"`
 	OutputTokens        int64   `json:"outputTokens"`
@@ -162,10 +163,12 @@ type FinOpsModelRow struct {
 }
 
 type FinOpsRecommendation struct {
-	Kind   string  `json:"kind"`
-	Title  string  `json:"title"`
-	Detail string  `json:"detail"`
-	Impact float64 `json:"impact,omitempty"`
+	Kind         string         `json:"kind"`
+	Title        string         `json:"title"`
+	Detail       string         `json:"detail"`
+	Impact       float64        `json:"impact,omitempty"`
+	DetailKey    string         `json:"detailKey,omitempty"`
+	DetailParams map[string]any `json:"detailParams,omitempty"`
 }
 
 // HealthView is the health & circuits surface payload.

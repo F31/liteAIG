@@ -3,6 +3,11 @@
 > 版本：1.0
 > 日期：2026-09
 > 方法：以 `docs/ROADMAP_V86_COMPLIANCE.md` 的 Stage 7–15 逐项核对当前代码库（grep/file:line 佐证），再对企业级能力面做一次补充扫描，输出「未闭环」与「值得推进」清单。
+>
+> **2026-10-18 更正**：Postgres RLS 已在启动路径启用。数据面与租户
+> Admin 请求通过 `TenantRouter` 使用 `liteaig_app` 角色和
+> `app.tenant_id`；控制面/后台任务使用平台连接。RLS 现作为 Repository
+> tenant scope 之外的第二道防线，`--postgres-rls=false` 仅用于回滚。
 
 ## 一、总览
 

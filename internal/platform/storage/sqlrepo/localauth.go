@@ -9,17 +9,19 @@ import (
 	"github.com/F31/liteAIG/internal/identity"
 )
 
-type LocalCredentialStore struct{ db *sql.DB }
+type LocalCredentialStore struct{ db DBTX }
 
-func NewLocalCredentialStore(db *sql.DB) *LocalCredentialStore { return &LocalCredentialStore{db: db} }
+func NewLocalCredentialStore(db DBTX) *LocalCredentialStore { return &LocalCredentialStore{db: db} }
 
 func (s *LocalCredentialStore) FindLocalCredential(ctx context.Context, username string) (identity.LocalCredential, error) {
 	var value identity.LocalCredential
+	var tenantID sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT a.id,
-CASE WHEN COALESCE(a.role,'tenant_admin')='system_admin' THEN '' ELSE (SELECT t.id FROM tenants t WHERE t.status='active' ORDER BY t.created_at LIMIT 1) END,
+CASE WHEN COALESCE(a.role,'tenant_admin')='system_admin' THEN NULL ELSE (SELECT t.id FROM tenants t WHERE t.status='active' ORDER BY t.created_at LIMIT 1) END,
 a.username,COALESCE(a.role,'tenant_admin'),a.password_hash,a.status,COALESCE(a.email,'')
 FROM local_admins a
-WHERE a.username=$1 AND (COALESCE(a.role,'tenant_admin')='system_admin' OR EXISTS (SELECT 1 FROM tenants t WHERE t.status='active'))`, username).Scan(&value.AdminID, &value.TenantID, &value.Username, &value.Role, &value.PasswordHash, &value.Status, &value.Email)
+WHERE a.username=$1 AND (COALESCE(a.role,'tenant_admin')='system_admin' OR EXISTS (SELECT 1 FROM tenants t WHERE t.status='active'))`, username).Scan(&value.AdminID, &tenantID, &value.Username, &value.Role, &value.PasswordHash, &value.Status, &value.Email)
+	value.TenantID = tenantID.String
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, errors.New("credential not found")
 	}
@@ -28,11 +30,13 @@ WHERE a.username=$1 AND (COALESCE(a.role,'tenant_admin')='system_admin' OR EXIST
 
 func (s *LocalCredentialStore) FindLocalUserByID(ctx context.Context, id string) (identity.LocalCredential, error) {
 	var value identity.LocalCredential
+	var tenantID sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT a.id,
-CASE WHEN COALESCE(a.role,'tenant_admin')='system_admin' THEN '' ELSE (SELECT t.id FROM tenants t WHERE t.status='active' ORDER BY t.created_at LIMIT 1) END,
+CASE WHEN COALESCE(a.role,'tenant_admin')='system_admin' THEN NULL ELSE (SELECT t.id FROM tenants t WHERE t.status='active' ORDER BY t.created_at LIMIT 1) END,
 a.username,COALESCE(a.role,'tenant_admin'),a.password_hash,a.status,COALESCE(a.email,'')
 FROM local_admins a
-WHERE a.id=$1 AND (COALESCE(a.role,'tenant_admin')='system_admin' OR EXISTS (SELECT 1 FROM tenants t WHERE t.status='active'))`, id).Scan(&value.AdminID, &value.TenantID, &value.Username, &value.Role, &value.PasswordHash, &value.Status, &value.Email)
+WHERE a.id=$1 AND (COALESCE(a.role,'tenant_admin')='system_admin' OR EXISTS (SELECT 1 FROM tenants t WHERE t.status='active'))`, id).Scan(&value.AdminID, &tenantID, &value.Username, &value.Role, &value.PasswordHash, &value.Status, &value.Email)
+	value.TenantID = tenantID.String
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, identity.ErrLocalUserNotFound
 	}

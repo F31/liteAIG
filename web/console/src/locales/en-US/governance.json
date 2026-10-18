@@ -76,6 +76,7 @@
   "simulator": "Routing Simulator",
   "model": "Logical model",
   "projectId": "Project ID",
+  "requiredCapabilities": "Required capabilities",
   "latency": "Latency",
   "cost": "Cost",
   "load": "Load",

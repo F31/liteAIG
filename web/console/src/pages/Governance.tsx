@@ -30,6 +30,7 @@ import {
   RuntimeResources,
 } from "../api/client";
 import { hasPermission, isAdminRole, useAuth } from "../state/auth";
+import { capabilityOptions } from "./resources/constants";
 import { useTenantConfigDraft } from "./resources/useTenantConfigDraft";
 
 type PublishInput = {
@@ -118,6 +119,8 @@ export default function Governance() {
     mutationFn: (input: {
       model: string;
       projectId: string;
+      requiredCapabilities?: string[];
+      requiresTools?: boolean;
       metrics: Record<
         string,
         { latencyMS: number; cost: number; load: number }
@@ -781,6 +784,17 @@ export default function Governance() {
                         rules={[{ required: true }]}
                       >
                         <Input style={{ width: 180 }} />
+                      </Form.Item>
+                      <Form.Item
+                        name="requiredCapabilities"
+                        label={t("requiredCapabilities")}
+                      >
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          style={{ width: 220 }}
+                          options={capabilityOptions(t)}
+                        />
                       </Form.Item>
                       <Form.Item
                         name={["metrics", "deployment-a", "latencyMS"]}

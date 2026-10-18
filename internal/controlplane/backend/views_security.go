@@ -50,9 +50,14 @@ type DelegationGrantInput struct {
 
 // SimulateRequest is a Routing Simulator replay input.
 type SimulateRequest struct {
-	Model     string                           `json:"model"`
-	ProjectID string                           `json:"projectId"`
-	Metrics   map[string]DeploymentMetricsView `json:"metrics,omitempty"`
+	Model string `json:"model"`
+	// RequiredCapabilities exercises the routing hard constraints the data
+	// plane applies (e.g. vision, audio, speech), so operators can preview
+	// which deployments a capability-qualified request would reach.
+	RequiredCapabilities []string                         `json:"requiredCapabilities,omitempty"`
+	RequiresTools        bool                             `json:"requiresTools,omitempty"`
+	ProjectID            string                           `json:"projectId"`
+	Metrics              map[string]DeploymentMetricsView `json:"metrics,omitempty"`
 }
 
 // SimulateResult is the simulator's explainable decision.

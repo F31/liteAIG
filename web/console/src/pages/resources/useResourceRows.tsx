@@ -268,9 +268,12 @@ export function useResourceRows(options: {
       const provider = providerPresets.find(
         (candidate) => candidate.id === model.providerId,
       );
+      const capabilities = (model.capabilities ?? []).join(", ");
       return {
         value: model.model,
-        label: `${provider?.label ?? model.providerId} · ${model.model}`,
+        label: `${provider?.label ?? model.providerId} · ${model.model}${
+          capabilities ? ` [${capabilities}]` : ""
+        }`,
       };
     },
   );

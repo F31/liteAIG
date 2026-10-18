@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestSemanticCrossTenantIsolation(t *testing.T) {
@@ -59,5 +60,43 @@ func TestSemanticNamespaceVersionInvalidation(t *testing.T) {
 	candidates, err := store.Search(ctx, SemanticKey{TenantID: "t", ProjectID: "p", Model: "embed", Dimension: 2, Version: 1}, []float64{1, 0}, 5)
 	if err != nil || len(candidates) != 1 || candidates[0].SourceKey != "old" {
 		t.Fatalf("version isolation broken: %+v, %v", candidates, err)
+	}
+}
+
+func TestSemanticStoreIsBounded(t *testing.T) {
+	store := NewMemorySemanticStoreWithConfig(MemorySemanticConfig{Capacity: 2})
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		key := SemanticKey{TenantID: "t", ProjectID: "p", Model: "m", Dimension: 2, Version: 1, SourceKey: "k" + string(rune('0'+i))}
+		if err := store.Put(ctx, key, []float64{1, float64(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := SemanticKey{TenantID: "t", ProjectID: "p", Model: "m", Dimension: 2, Version: 1}
+	got, err := store.Search(ctx, search, []float64{1, 4}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want capacity 2", len(got))
+	}
+}
+
+func TestSemanticStoreExpiresByTTL(t *testing.T) {
+	store := NewMemorySemanticStoreWithConfig(MemorySemanticConfig{Capacity: 4, TTL: time.Minute})
+	now := time.Unix(100, 0)
+	store.clock = func() time.Time { return now }
+	ctx := context.Background()
+	key := SemanticKey{TenantID: "t", ProjectID: "p", Model: "m", Dimension: 2, Version: 1, SourceKey: "k"}
+	if err := store.Put(ctx, key, []float64{1, 1}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	got, err := store.Search(ctx, key, []float64{1, 1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expired vector still returned: %+v", got)
 	}
 }

@@ -14,9 +14,9 @@ import (
 // EvidenceRepository assembles the read-only evidence record stream for the
 // Evidence Export capability. Every record is derived from durable, tenant-
 // scoped tables; prompt/response bodies and secrets are never selected.
-type EvidenceRepository struct{ db *sql.DB }
+type EvidenceRepository struct{ db DBTX }
 
-func NewEvidenceRepository(db *sql.DB) *EvidenceRepository { return &EvidenceRepository{db: db} }
+func NewEvidenceRepository(db DBTX) *EvidenceRepository { return &EvidenceRepository{db: db} }
 
 // Collect returns evidence records covering config/policy versions, RBAC role
 // assignments, audit events, guardrail events, provider processing

@@ -2,7 +2,6 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -13,11 +12,11 @@ import (
 
 // AlertAuditRecorder writes alert lifecycle actions to audit_events.
 type AlertAuditRecorder struct {
-	db  *sql.DB
+	db  DBTX
 	ids contracts.IDGenerator
 }
 
-func NewAlertAuditRecorder(db *sql.DB, ids contracts.IDGenerator) *AlertAuditRecorder {
+func NewAlertAuditRecorder(db DBTX, ids contracts.IDGenerator) *AlertAuditRecorder {
 	return &AlertAuditRecorder{db: db, ids: ids}
 }
 

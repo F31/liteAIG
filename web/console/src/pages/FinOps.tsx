@@ -7,8 +7,21 @@ const money = (value?: number) => (value ?? 0).toFixed(4);
 const percent = (value?: number) =>
   `${(((value ?? 0) as number) * 100).toFixed(1)}%`;
 
+function useRecI18n() {
+  const { t } = useTranslation();
+  const kind = (k: string) => t(`finops.recKind.${k}`, k);
+  const title = (k: string) => t(`finops.recTitle.${k}`, k);
+  const detail = (k: string, params?: Record<string, unknown>) =>
+    t(`finops.recDetail.${k}`, { defaultValue: k, ...params });
+  const configTitle = (k: string) => t(`finops.recConfigTitle.${k}`, k);
+  const configExplanation = (k: string) =>
+    t(`finops.recConfigExplanation.${k}`, k);
+  return { kind, title, detail, configTitle, configExplanation };
+}
+
 export default function FinOps() {
   const { t } = useTranslation();
+  const rec = useRecI18n();
   const finops = useQuery({
     queryKey: ["finops"],
     queryFn: () => api<FinOpsView>("/api/admin/finops"),
@@ -96,12 +109,16 @@ export default function FinOps() {
               <List.Item.Meta
                 title={
                   <span>
-                    <Tag>{item.kind}</Tag>
-                    {item.title}
+                    <Tag>{rec.kind(item.kind)}</Tag>
+                    {rec.title(item.kind)}
                     {item.impact ? ` ${money(item.impact)}` : ""}
                   </span>
                 }
-                description={item.detail}
+                description={
+                  item.detailKey
+                    ? rec.detail(item.detailKey, item.detailParams)
+                    : item.detail
+                }
               />
             </List.Item>
           )}
@@ -120,12 +137,12 @@ export default function FinOps() {
                 title={
                   <span>
                     <Tag color={item.acceptable ? "green" : "default"}>
-                      {item.kind}
+                      {rec.kind(item.kind)}
                     </Tag>
-                    {item.title}
+                    {rec.configTitle(item.kind)}
                   </span>
                 }
-                description={`${item.explanation} · ${item.metric} · ${item.samples} ${t("finops.samples")}`}
+                description={`${rec.configExplanation(item.kind)} · ${item.metric} · ${item.samples} ${t("finops.samples")}`}
               />
             </List.Item>
           )}
@@ -137,7 +154,13 @@ export default function FinOps() {
           dataSource={finops.data?.byProject ?? []}
           pagination={false}
           columns={[
-            { title: t("finops.project"), dataIndex: "projectId" },
+            {
+              title: t("finops.project"),
+              render: (_, row) =>
+                row.projectName
+                  ? `${row.projectName} (${row.projectId})`
+                  : row.projectId,
+            },
             { title: t("finops.requests"), dataIndex: "requests" },
             {
               title: t("finops.tokens"),

@@ -17,6 +17,12 @@ import {
 } from "antd";
 import { useTranslation } from "react-i18next";
 import { newID } from "./helpers";
+import {
+  canonicalCapabilities,
+  capabilityColor,
+  capabilityLabel,
+  capabilityOptions,
+} from "./constants";
 import type { Deployment, DeploymentFormValues } from "./types";
 import type {
   DraftEditor,
@@ -119,7 +125,7 @@ export function DeploymentSection({
       credential_id: values.credential_id,
       upstream_model: values.upstream_model,
       data_region: values.data_region,
-      capabilities: values.capabilities ?? [],
+      capabilities: canonicalCapabilities(values.capabilities) ?? [],
       context_window: values.context_window,
       priority: values.priority,
       status: values.status,
@@ -203,6 +209,28 @@ export function DeploymentSection({
       dataIndex: "data_region",
       key: "data_region",
       render: (value: string, row: Deployment) => value || row.region || "-",
+    },
+    {
+      title: t("resources.capabilities"),
+      dataIndex: "capabilities",
+      key: "capabilities",
+      render: (value: string[] | undefined, row: Deployment) => {
+        const capabilities = value ?? row.capabilities ?? [];
+        if (capabilities.length === 0) return "-";
+        return (
+          <Space size={4} wrap>
+            {capabilities.map((capability) => (
+              <Tag
+                key={capability}
+                color={capabilityColor(capability)}
+                title={capability}
+              >
+                {capabilityLabel(t, capability)}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: t("common.status"),
@@ -328,14 +356,15 @@ export function DeploymentSection({
           >
             <Select options={rows.regionOptions} />
           </Form.Item>
-          <Form.Item name="capabilities" label={t("resources.capabilities")}>
+          <Form.Item
+            name="capabilities"
+            label={t("resources.capabilities")}
+            extra={t("resources.capabilitiesHelp")}
+          >
             <Select
               mode="tags"
-              options={[
-                { value: "chat", label: "chat" },
-                { value: "embeddings", label: "embeddings" },
-                { value: "tools", label: "tools" },
-              ]}
+              options={capabilityOptions(t)}
+              tokenSeparators={[",", " "]}
             />
           </Form.Item>
           <Form.Item name="context_window" label={t("resources.contextWindow")}>

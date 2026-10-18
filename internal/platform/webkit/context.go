@@ -1,6 +1,7 @@
 package webkit
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,6 +25,12 @@ func newContext(w http.ResponseWriter, r *http.Request) *Context {
 
 // Request returns the underlying request.
 func (c *Context) Request() *http.Request { return c.r }
+
+// SetContext replaces the request context so downstream handlers and storage
+// adapters observe request-scoped values (for example the tenant scope).
+func (c *Context) SetContext(ctx context.Context) {
+	c.r = c.r.WithContext(ctx)
+}
 
 // Response returns the wrapped response writer.
 func (c *Context) Response() http.ResponseWriter { return c.w }

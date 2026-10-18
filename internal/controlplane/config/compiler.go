@@ -55,7 +55,7 @@ func CompileWithSystemDefaultsAndAPIKeys(system SystemConfig, document TenantCon
 		data.Credentials = append(data.Credentials, runtime.Credential{ID: item.ID, ProviderID: item.ProviderID, OwnerScope: item.OwnerScope, SecretRef: item.SecretRef, Status: item.Status})
 	}
 	for _, item := range document.Deployments {
-		data.Deployments = append(data.Deployments, runtime.Deployment{ID: item.ID, ProviderID: item.ProviderID, CredentialID: item.CredentialID, PoolID: item.PoolID, UpstreamModel: item.UpstreamModel, DataRegion: item.DataRegion, Status: item.Status, Capabilities: item.Capabilities, ContextWindow: item.ContextWindow, Priority: item.Priority})
+		data.Deployments = append(data.Deployments, runtime.Deployment{ID: item.ID, ProviderID: item.ProviderID, CredentialID: item.CredentialID, PoolID: item.PoolID, UpstreamModel: item.UpstreamModel, DataRegion: item.DataRegion, Status: item.Status, Capabilities: CanonicalCapabilities(item.Capabilities), ContextWindow: item.ContextWindow, Priority: item.Priority})
 		if item.LeaseCapacity > 0 {
 			data.Leases = append(data.Leases, runtime.LeaseConfig{DeploymentID: item.ID, Capacity: item.LeaseCapacity, TTLSeconds: leaseTTLSeconds(item.LeaseTTLMS)})
 		}

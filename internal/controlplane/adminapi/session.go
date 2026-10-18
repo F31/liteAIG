@@ -33,8 +33,8 @@ type SessionManager struct {
 }
 
 func NewSessionManager(config SessionConfig, clock contracts.Clock, random io.Reader) (*SessionManager, error) {
-	if config.CookieName == "" || config.TTL <= 0 || !config.Secure || clock == nil {
-		return nil, errors.New("secure session configuration is required")
+	if config.CookieName == "" || config.TTL <= 0 || clock == nil {
+		return nil, errors.New("session configuration is required")
 	}
 	if random == nil {
 		random = rand.Reader

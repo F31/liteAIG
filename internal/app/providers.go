@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/F31/liteAIG/internal/connectors/model/anthropic"
 	"github.com/F31/liteAIG/internal/connectors/model/azure"
@@ -31,6 +32,7 @@ type providerResolver struct {
 	http    *http.Client
 	secrets secrets.Provider
 	policy  egress.Policy
+	timeout time.Duration
 
 	mu       sync.Mutex
 	invokers map[string]contracts.InteractionInvoker
@@ -41,6 +43,13 @@ func newProviderResolver(client *http.Client, secrets secrets.Provider, policy e
 		client = &http.Client{}
 	}
 	return &providerResolver{http: client, secrets: secrets, policy: policy, invokers: map[string]contracts.InteractionInvoker{}}
+}
+
+// WithTimeout sets the non-streaming upstream request timeout applied to the
+// connectors this resolver builds.
+func (r *providerResolver) WithTimeout(timeout time.Duration) *providerResolver {
+	r.timeout = timeout
+	return r
 }
 
 func (r *providerResolver) Resolve(snapshot *runtime.TenantRuntimeSnapshot, deployment runtime.Deployment) (contracts.InteractionInvoker, bool) {
@@ -60,7 +69,7 @@ func (r *providerResolver) ResolveCredential(snapshot *runtime.TenantRuntimeSnap
 		return nil, false
 	}
 
-	cacheKey := deployment.ID + ":" + credentialID + ":" + provider.Endpoint + ":" + deployment.UpstreamModel
+	cacheKey := deployment.ID + ":" + credentialID + ":" + provider.Endpoint + ":" + deployment.UpstreamModel + ":" + r.timeout.String()
 	r.mu.Lock()
 	if invoker, cached := r.invokers[cacheKey]; cached {
 		r.mu.Unlock()
@@ -89,18 +98,27 @@ func (r *providerResolver) build(provider runtime.Provider, credential runtime.C
 		config.BaseURL = provider.Endpoint
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return openai.New(config, r.http, r.secrets)
 	case "anthropic":
 		config := anthropic.DefaultConfig()
 		config.BaseURL = provider.Endpoint
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return anthropic.New(config, r.http, r.secrets)
 	case "azure-openai":
 		config := azure.DefaultConfig()
 		config.BaseURL = provider.Endpoint
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return azure.New(config, r.http, r.secrets)
 	case "bedrock":
 		region := regionFromEndpoint(provider.Endpoint, "bedrock-runtime")
@@ -109,6 +127,9 @@ func (r *providerResolver) build(provider runtime.Provider, credential runtime.C
 		config.Region = region
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return bedrock.New(config, r.http, r.secrets)
 	case "vertex":
 		config := vertex.DefaultConfig()
@@ -116,12 +137,18 @@ func (r *providerResolver) build(provider runtime.Provider, credential runtime.C
 		config.Location = locationFromEndpoint(provider.Endpoint)
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return vertex.New(config, r.http, r.secrets)
 	case "gemini":
 		config := gemini.DefaultConfig()
 		config.BaseURL = provider.Endpoint
 		config.SecretRef = credential.SecretRef
 		config.AllowInsecureHTTP = allowsInsecureHTTP(provider.Endpoint)
+		if r.timeout > 0 {
+			config.RequestTimeout = r.timeout
+		}
 		return gemini.New(config, r.http, r.secrets)
 	default:
 		return nil, fmt.Errorf("unsupported provider type %q", provider.Type)

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/F31/liteAIG/internal/cache"
 	"github.com/F31/liteAIG/internal/controlplane/backend"
 	"io/fs"
 	"log"
@@ -54,6 +55,7 @@ import (
 	"github.com/F31/liteAIG/internal/platform/storage/sqlrepo"
 	"github.com/F31/liteAIG/internal/platform/webkit"
 	"github.com/F31/liteAIG/internal/policy/rate"
+	"github.com/F31/liteAIG/internal/resilience/retry"
 	"github.com/F31/liteAIG/internal/tenancy"
 	"github.com/F31/liteAIG/migrations"
 	"github.com/F31/liteAIG/web/console"
@@ -62,16 +64,23 @@ import (
 
 // LiteOptions configures the runnable Lite management plane.
 type LiteOptions struct {
-	DSN         string
-	AdminAddr   string
-	GatewayAddr string
-	BaseURL     string       // gateway base URL used in SDK examples
-	Lifecycle   *Lifecycle   // shared drain lifecycle (created by Lite when nil)
-	DrainConfig DrainConfig  // used when Lifecycle is nil
-	OIDC        *OIDCOptions // optional SSO; nil or empty Issuer keeps local login only
-	Analytics   *AnalyticsOptions
-	WebhookURL  string       // opt-in metadata notifications via the Lite egress policy
-	Mail        *MailOptions // optional SMTP relay; nil or empty Host keeps the email reset flow disabled
+	DSN string
+	// PostgresRLS enables row-level security and tenant-scoped pools for
+	// PostgreSQL. Nil means enabled; set false only for controlled rollback.
+	PostgresRLS *bool
+	// PostgresTenantPools bounds lazily-created per-tenant connection pools.
+	// Each pool keeps at most two connections; size this against Postgres
+	// max_connections.
+	PostgresTenantPools int
+	AdminAddr           string
+	GatewayAddr         string
+	BaseURL             string       // gateway base URL used in SDK examples
+	Lifecycle           *Lifecycle   // shared drain lifecycle (created by Lite when nil)
+	DrainConfig         DrainConfig  // used when Lifecycle is nil
+	OIDC                *OIDCOptions // optional SSO; nil or empty Issuer keeps local login only
+	Analytics           *AnalyticsOptions
+	WebhookURL          string       // opt-in metadata notifications via the Lite egress policy
+	Mail                *MailOptions // optional SMTP relay; nil or empty Host keeps the email reset flow disabled
 
 	OTLPTracesEndpoint  string // optional OTLP/HTTP traces endpoint; empty falls back to LITEAIG_OTLP_ENDPOINT
 	OTLPMetricsEndpoint string // optional OTLP/HTTP metrics endpoint
@@ -84,6 +93,36 @@ type LiteOptions struct {
 	GatewayRPM   int
 	GatewayBurst int
 	GatewayTPM   int64
+
+	// GatewayMaxBodyBytes bounds inbound data-plane request bodies. Zero uses
+	// the built-in default. Audio/vision/file endpoints usually need a larger
+	// value than plain chat traffic.
+	GatewayMaxBodyBytes int64
+
+	// SemanticCacheCapacity and SemanticCacheTTL bound the in-process semantic
+	// vector index. Zero capacity uses the built-in default; zero TTL disables
+	// expiration.
+	SemanticCacheCapacity int
+	SemanticCacheTTL      time.Duration
+	ExactCacheCapacity    int
+
+	// Execution timeouts are zero-value defaults from retry.DefaultPolicy.
+	// Streaming responses have no overall deadline unless StreamTotalTimeout
+	// is explicitly set; first-token and idle timeouts still bound stalls.
+	AttemptTimeout     time.Duration
+	TotalTimeout       time.Duration
+	StreamTotalTimeout time.Duration
+	StreamIdleTimeout  time.Duration
+	FirstTokenTimeout  time.Duration
+	ProviderTimeout    time.Duration
+
+	// ExternalGuardrailURL enables the Layer 3 streaming shadow guard against
+	// an external content-safety service. The same egress/SSRF policy as model
+	// connectors applies. Empty disables Layer 3.
+	ExternalGuardrailURL      string
+	ExternalGuardrailToken    string
+	ExternalGuardrailTimeout  time.Duration
+	ExternalGuardrailFailMode string // fail_open (default), fail_closed, bypass
 
 	// RuntimeBundle delivery (Stage 11). ControlPlane side: BundleSigner signs
 	// every published snapshot and BundleToken authenticates the pull endpoint
@@ -105,6 +144,16 @@ type LiteOptions struct {
 	// self-hosted Kubernetes deployment). All other private/internal ranges stay
 	// denied, so the default Single-operator posture is unchanged when empty.
 	EgressAllowCIDRs []string
+
+	// MinPasswordSize overrides the minimum length accepted for the initial
+	// admin password (and password resets). Zero keeps the secure default (8).
+	// Lowering it is a deliberate, local-development trade-off.
+	MinPasswordSize int
+
+	// CookieSecure controls the Secure flag on the admin session cookie.
+	// The default (true) requires HTTPS. Set to false for plain-HTTP local
+	// development so the browser will send the cookie back.
+	CookieSecure *bool
 
 	// AgentCard, when non-nil, is published by the gateway at
 	// /.well-known/agent-card.json. It is the operator-supplied static Agent
@@ -275,6 +324,7 @@ func openA2APushPayload(cipher *secrets.Cipher) func([]byte) ([]byte, error) {
 // clean up the resources they create.
 type liteFoundation struct {
 	db             *sql.DB
+	rls            *postgres.TenantRouter
 	cipher         *secrets.Cipher
 	pepper         *identity.Pepper
 	clock          systemClock
@@ -285,17 +335,34 @@ type liteFoundation struct {
 	hasher         *password.Argon2id
 }
 
-func openLiteFoundation(ctx context.Context, dsn string) (*liteFoundation, error) {
+func openLiteFoundation(ctx context.Context, dsn string, postgresRLS bool, tenantPools int) (*liteFoundation, error) {
 	db, err := openLiteStorage(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open lite storage: %w", err)
 	}
+	var router *postgres.TenantRouter
 	fail := func(err error) (*liteFoundation, error) {
+		if router != nil {
+			_ = router.Close()
+		}
 		_ = db.Close()
 		return nil, err
 	}
 	if err := migrations.Apply(ctx, db); err != nil {
 		return fail(fmt.Errorf("apply lite migrations: %w", err))
+	}
+	if isPostgresDSN(dsn) {
+		if postgresRLS {
+			if err := postgres.EnableRLS(ctx, db); err != nil {
+				return fail(fmt.Errorf("enable postgres RLS: %w", err))
+			}
+			router, err = postgres.NewTenantRouter(dsn, db, tenantPools)
+			if err != nil {
+				return fail(fmt.Errorf("build postgres tenant router: %w", err))
+			}
+		} else {
+			log.Printf("lite: WARNING: PostgreSQL RLS disabled by configuration; tenant isolation relies on repository scoping")
+		}
 	}
 	masterKey, err := loadLiteMasterKey(dsn)
 	if err != nil {
@@ -307,6 +374,9 @@ func openLiteFoundation(ctx context.Context, dsn string) (*liteFoundation, error
 	}
 	ids := id.NewGenerator(nil)
 	store := sqlrepo.Open(db, sqlrepo.Deps{IDs: ids, Clock: systemClock{}})
+	if router != nil {
+		store = sqlrepo.OpenWithDB(router, db, sqlrepo.Deps{IDs: ids, Clock: systemClock{}})
+	}
 	pepper, err := identity.EnsurePepper(ctx, store.Pepper, cipher, localPepperVersion, localPepperRef)
 	if err != nil {
 		return fail(err)
@@ -316,7 +386,7 @@ func openLiteFoundation(ctx context.Context, dsn string) (*liteFoundation, error
 		return fail(err)
 	}
 	return &liteFoundation{
-		db: db, cipher: cipher, pepper: pepper,
+		db: db, rls: router, cipher: cipher, pepper: pepper,
 		clock:          systemClock{},
 		ids:            ids,
 		store:          store,
@@ -327,10 +397,26 @@ func openLiteFoundation(ctx context.Context, dsn string) (*liteFoundation, error
 }
 
 func openLiteStorage(ctx context.Context, dsn string) (*sql.DB, error) {
-	if strings.HasPrefix(strings.TrimSpace(dsn), "postgres://") || strings.HasPrefix(strings.TrimSpace(dsn), "postgresql://") {
+	if isPostgresDSN(dsn) {
 		return postgres.Open(ctx, dsn)
 	}
 	return sqlite.Open(ctx, dsn)
+}
+
+func isPostgresDSN(dsn string) bool {
+	trimmed := strings.TrimSpace(dsn)
+	return strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://")
+}
+
+func externalFailMode(value string) (guardrail.ExternalFailMode, error) {
+	switch guardrail.ExternalFailMode(strings.TrimSpace(strings.ToLower(value))) {
+	case "":
+		return guardrail.ExternalFailOpen, nil
+	case guardrail.ExternalFailOpen, guardrail.ExternalFailClosed, guardrail.ExternalBypass:
+		return guardrail.ExternalFailMode(strings.TrimSpace(strings.ToLower(value))), nil
+	default:
+		return "", fmt.Errorf("invalid external guardrail fail mode %q (use fail_open, fail_closed, or bypass)", value)
+	}
 }
 
 // alertNotifiersFor builds the optional per-alert email delivery channel. It
@@ -468,7 +554,11 @@ func bootstrapLiteRuntime(ctx context.Context, f *liteFoundation, dsn string, si
 // endpoints (OIDC + local accounts + email-verified password reset) and the
 // outer handler stack with its drain gate.
 func buildLiteAdmin(controlBackend *backend.ControlBackend, f *liteFoundation, options LiteOptions, egressClient *http.Client, lifecycle *Lifecycle, auditEvent func(ctx context.Context, tenantID, actorID, action, resourceType, resourceID string) error, systemAuditEvent func(ctx context.Context, actorID, action, resourceType, resourceID string) error, events contracts.EventSink, bundleHub *bundle.Hub) (http.Handler, error) {
-	sessions, err := adminapi.NewSessionManager(adminapi.SessionConfig{CookieName: "lia_session", TTL: sessionTTL, Secure: true}, f.clock, nil)
+	cookieSecure := true
+	if options.CookieSecure != nil {
+		cookieSecure = *options.CookieSecure
+	}
+	sessions, err := adminapi.NewSessionManager(adminapi.SessionConfig{CookieName: "lia_session", TTL: sessionTTL, Secure: cookieSecure}, f.clock, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,9 +582,14 @@ func buildLiteAdmin(controlBackend *backend.ControlBackend, f *liteFoundation, o
 	auditLocalAuth := func(ctx context.Context, actor, action, resourceID string) error {
 		tenant, err := f.store.Tenancy.FirstTenant(ctx)
 		if err != nil || tenant == nil {
+			log.Printf("lite: auditLocalAuth first tenant: %v", err)
 			return err
 		}
-		return auditEvent(ctx, tenant.ID, actor, action, "local_user", resourceID)
+		if err := auditEvent(ctx, tenant.ID, actor, action, "local_user", resourceID); err != nil {
+			log.Printf("lite: auditLocalAuth record: %v", err)
+			return err
+		}
+		return nil
 	}
 	server = server.WithAudit(auditEvent).WithSystemAudit(systemAuditEvent).WithSessionInvalidation(sessions.InvalidateForAdmin)
 	if oidcLogin != nil {
@@ -609,7 +704,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	if options.BaseURL == "" {
 		options.BaseURL = "http://localhost:8081"
 	}
-	foundation, err := openLiteFoundation(ctx, options.DSN)
+	postgresRLS := true
+	if options.PostgresRLS != nil {
+		postgresRLS = *options.PostgresRLS
+	}
+	foundation, err := openLiteFoundation(ctx, options.DSN, postgresRLS, options.PostgresTenantPools)
 	if err != nil {
 		return nil, err
 	}
@@ -636,7 +735,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	securityEvents := foundation.store.SecurityEvents
 	toolCalls := foundation.store.ToolCalls
 
-	bootstrapService, err := setup.NewService(setup.DefaultConfig(), foundation.store.Bootstrap, foundation.hasher, foundation.ids, foundation.ids, foundation.clock)
+	setupConfig := setup.DefaultConfig()
+	if options.MinPasswordSize > 0 {
+		setupConfig.MinimumPasswordSize = options.MinPasswordSize
+	}
+	bootstrapService, err := setup.NewService(setupConfig, foundation.store.Bootstrap, foundation.hasher, foundation.ids, foundation.ids, foundation.clock)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -646,8 +749,24 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	// providers) while keeping the default SSRF guardrails (no internal address
 	// ranges, no redirects, capped bodies).
 	egressClient := egress.Client(appPolicy)
+	var externalGuardrail guardrail.ExternalProvider
+	if options.ExternalGuardrailURL != "" {
+		externalGuardrail, err = guardrail.NewHTTPProvider(guardrail.HTTPProviderConfig{
+			URL: options.ExternalGuardrailURL, Token: options.ExternalGuardrailToken,
+			Timeout: options.ExternalGuardrailTimeout, Client: egressClient,
+		})
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	externalFailMode, err := externalFailMode(options.ExternalGuardrailFailMode)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	prober := newProviderProber(egressClient, foundation.secretProvider)
-	providerSetup := newRealProviderSetup(foundation.ids, foundation.clock, tenancyRepo, configService, configRepo, foundation.secretVault, foundation.cipher, egressClient, appPolicy)
+	providerSetup := newRealProviderSetup(foundation.ids, foundation.clock, tenancyRepo, configService, configRepo, foundation.secretVault, foundation.cipher, egressClient, appPolicy, foundation.store.ResourceCatalog)
 	live := backend.NewLiveBus()
 	// Standard tier coordination: when a --coordinator redis:// URL is set, the
 	// budget ledger, concurrency leases, and inflight counters are backed by
@@ -764,13 +883,40 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	alertService.SetEventSink(events)
 	approvalService.SetEventSink(events)
 	configService.SetEventSink(events)
-	pipeline, err := newLitePipeline(accountingRepo, live, foundation.ids, foundation.clock, egressClient, foundation.secretProvider, appPolicy, settlementCurrency, lifecycle.Streams(), approvalCheckpoint, events, rate.Policy{RequestsPerMinute: options.GatewayRPM, Burst: options.GatewayBurst}, options.GatewayTPM, prober.Probe, coord)
+	execPolicy := retry.DefaultPolicy()
+	if options.AttemptTimeout > 0 {
+		execPolicy.AttemptTimeout = options.AttemptTimeout
+	}
+	if options.TotalTimeout > 0 {
+		execPolicy.TotalTimeout = options.TotalTimeout
+	}
+	if options.StreamTotalTimeout > 0 {
+		execPolicy.StreamTotalTimeout = options.StreamTotalTimeout
+	}
+	if options.StreamIdleTimeout > 0 {
+		execPolicy.StreamIdleTimeout = options.StreamIdleTimeout
+	}
+	if options.FirstTokenTimeout > 0 {
+		execPolicy.FirstTokenTimeout = options.FirstTokenTimeout
+	}
+	if options.ProviderTimeout > 0 {
+		execPolicy.ProviderTimeout = options.ProviderTimeout
+	}
+	pipeline, err := newLitePipeline(accountingRepo, live, foundation.ids, foundation.clock, egressClient, foundation.secretProvider, appPolicy, settlementCurrency, lifecycle.Streams(), approvalCheckpoint, events, rate.Policy{RequestsPerMinute: options.GatewayRPM, Burst: options.GatewayBurst}, options.GatewayTPM, prober.Probe, coord, execPolicy)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	pipeline.tracer = tracer
 	pipeline.metricSink = metricSink
+	pipeline.externalGuardrail = externalGuardrail
+	pipeline.externalFailMode = externalFailMode
+	pipeline.semantic = cache.NewMemorySemanticStoreWithConfig(cache.MemorySemanticConfig{
+		Capacity: options.SemanticCacheCapacity, TTL: options.SemanticCacheTTL,
+	})
+	if options.ExactCacheCapacity > 0 && (coord == nil || coord.client == nil) {
+		pipeline.store = cache.NewMemoryStore(cache.MemoryConfig{Capacity: options.ExactCacheCapacity})
+	}
 	playgroundService, err := playground.New(pipeline, foundation.ids, foundation.clock)
 	if err != nil {
 		_ = db.Close()
@@ -779,8 +925,12 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 
 	// Data plane: bearer-token auth + admission + the governed pipeline behind
 	// an OpenAI/Anthropic-compatible HTTP gateway.
+	maxBodyBytes := options.GatewayMaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = gatewayMaxBodyBytes
+	}
 	authenticator := auth.NewAPIKeyAuthenticator(registry, foundation.secretProvider, foundation.clock)
-	admissionService, err := admission.New(admission.Config{MaxBodyBytes: gatewayMaxBodyBytes}, authenticator, foundation.ids, foundation.clock)
+	admissionService, err := admission.New(admission.Config{MaxBodyBytes: maxBodyBytes}, authenticator, foundation.ids, foundation.clock)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -813,8 +963,8 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 		},
 	}
 	pushSigningSecret, _ := foundation.pepper.Resolve(ctx, localPepperRef)
-	gatewayServer := gatewayserver.New(newLiteGatewayCore(admissionService, pipeline, authenticator, toolCalls, foundation.store.A2ATask, egressClient, foundation.secretProvider, federatedAuth), gatewayserver.Config{
-		MaxBodyBytes:         gatewayMaxBodyBytes,
+	gatewayServer := gatewayserver.New(newLiteGatewayCore(admissionService, pipeline, authenticator, toolCalls, foundation.store.A2ATask, egressClient, foundation.secretProvider, federatedAuth, maxBodyBytes), gatewayserver.Config{
+		MaxBodyBytes:         maxBodyBytes,
 		LocalAgentCard:       options.AgentCard,
 		Middleware:           []webkit.Middleware{drainGate(lifecycle)},
 		CallbackClient:       egressClient,
@@ -888,7 +1038,7 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 	agentGraph := &liteAgentGraph{accounting: accountingRepo}
 	cardClient := a2a.NewClient(egressClient, a2a.NewMemoryCardStore(10*time.Minute))
 	fed := &liteFederation{lifecycle: federationLifecycle, registry: registry, cardClient: cardClient, pushOutbox: foundation.store.A2APushOutbox}
-	auditRecorder := sqlrepo.NewAuditRecorder(foundation.db, foundation.ids)
+	auditRecorder := sqlrepo.NewAuditRecorder(foundation.db, foundation.ids, isPostgresDSN(options.DSN))
 	// auditEvent writes a tenant-scoped audit row. Callers pass the tenant ID
 	// explicitly because unauthenticated flows (emergency reset, failed
 	// logins) resolve it before the actor is known.
@@ -1133,6 +1283,11 @@ func NewLite(ctx context.Context, options LiteOptions) (*Lite, error) {
 			}
 		}
 		coord.close()
+		if foundation.rls != nil {
+			if err := foundation.rls.Close(); firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := db.Close(); firstErr == nil {
 			firstErr = err
 		}

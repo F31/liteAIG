@@ -14,9 +14,9 @@ var ErrSecretNotFound = errors.New("secret material not found")
 // SecretVault is a generic envelope-encrypted secret store keyed by opaque
 // reference. The ciphertext is opaque to the vault; the app layer owns the
 // cipher.
-type SecretVault struct{ db *sql.DB }
+type SecretVault struct{ db DBTX }
 
-func NewSecretVault(db *sql.DB) *SecretVault { return &SecretVault{db: db} }
+func NewSecretVault(db DBTX) *SecretVault { return &SecretVault{db: db} }
 
 // Put inserts or replaces the material for a reference.
 func (s *SecretVault) Put(ctx context.Context, ref, tenantID string, ciphertext []byte) error {

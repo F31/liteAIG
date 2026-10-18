@@ -2,7 +2,6 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -11,9 +10,9 @@ import (
 
 // BudgetAuditRepository records reservation lifecycle facts for audit and recovery.
 // It never participates in admission-time correctness.
-type BudgetAuditRepository struct{ db *sql.DB }
+type BudgetAuditRepository struct{ db DBTX }
 
-func NewBudgetAuditRepository(db *sql.DB) *BudgetAuditRepository {
+func NewBudgetAuditRepository(db DBTX) *BudgetAuditRepository {
 	return &BudgetAuditRepository{db: db}
 }
 

@@ -17,10 +17,12 @@ import (
 // attached, text deltas run through Inline/Buffered/Shadow checks (spec §16)
 // before they reach the writer; a block aborts the stream.
 type streamCollector struct {
-	out contracts.StreamWriter
-	gr  *gatewayguardrail.StreamGuard
+	out     contracts.StreamWriter
+	gr      *gatewayguardrail.StreamGuard
+	started time.Time
 
 	mu         sync.Mutex
+	ttft       time.Duration
 	responseID string
 	model      string
 	content    strings.Builder
@@ -29,8 +31,16 @@ type streamCollector struct {
 	final      bool
 }
 
-func newStreamCollector(out contracts.StreamWriter, gr *gatewayguardrail.StreamGuard) *streamCollector {
-	return &streamCollector{out: out, gr: gr}
+func newStreamCollector(out contracts.StreamWriter, gr *gatewayguardrail.StreamGuard, started time.Time) *streamCollector {
+	return &streamCollector{out: out, gr: gr, started: started}
+}
+
+// TTFT returns the time to the first delivered chunk. It is zero when no
+// chunk reached the client (for example, a pre-delivery failure).
+func (c *streamCollector) TTFT() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ttft
 }
 
 func (c *streamCollector) WriteChunk(ctx context.Context, chunk contracts.StreamChunk) error {
@@ -76,6 +86,13 @@ func (c *streamCollector) WriteChunk(ctx context.Context, chunk contracts.Stream
 		c.mu.Unlock()
 	}
 	if c.out != nil && (delivered != "" || event.StopReason != "" || event.Final || len(event.ToolCallDeltas) > 0) {
+		if delivered != "" || len(event.ToolCallDeltas) > 0 {
+			c.mu.Lock()
+			if c.ttft == 0 && !c.started.IsZero() {
+				c.ttft = time.Since(c.started)
+			}
+			c.mu.Unlock()
+		}
 		rewritten := chunk
 		rewritten.Event.Delta = delivered
 		return c.out.WriteChunk(ctx, rewritten)

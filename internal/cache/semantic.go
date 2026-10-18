@@ -1,10 +1,12 @@
 package cache
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"math"
 	"sync"
+	"time"
 )
 
 // SemanticStore is a replaceable tenant-namespaced vector index for the
@@ -36,28 +38,78 @@ type SemanticCandidate struct {
 	Score     float64
 }
 
+// MemorySemanticConfig bounds the in-process semantic index. A zero capacity
+// uses a conservative default; a zero TTL disables expiration.
+type MemorySemanticConfig struct {
+	Capacity int
+	TTL      time.Duration
+}
+
 // MemorySemanticStore is the default in-memory cosine store (Lite/tests).
+// It is an LRU so an unbounded prompt stream cannot grow memory forever.
 type MemorySemanticStore struct {
-	mu    sync.Mutex
-	index map[string]map[string][]float64 // namespace -> sourceKey -> vector
+	mu       sync.Mutex
+	capacity int
+	ttl      time.Duration
+	clock    func() time.Time
+	entries  map[string]*list.Element // namespace + "\x00" + sourceKey -> element
+	order    *list.List
 }
 
-// NewMemorySemanticStore builds an in-memory semantic store.
+type semanticEntry struct {
+	namespace string
+	sourceKey string
+	vector    []float64
+	storedAt  time.Time
+}
+
+// NewMemorySemanticStore builds an in-memory semantic store with defaults.
 func NewMemorySemanticStore() *MemorySemanticStore {
-	return &MemorySemanticStore{index: map[string]map[string][]float64{}}
+	return NewMemorySemanticStoreWithConfig(MemorySemanticConfig{})
 }
 
-// Put stores a vector in its tenant namespace.
+// NewMemorySemanticStoreWithConfig builds a bounded in-memory semantic store.
+func NewMemorySemanticStoreWithConfig(config MemorySemanticConfig) *MemorySemanticStore {
+	if config.Capacity <= 0 {
+		config.Capacity = 1024
+	}
+	return &MemorySemanticStore{
+		capacity: config.Capacity,
+		ttl:      config.TTL,
+		clock:    time.Now,
+		entries:  map[string]*list.Element{},
+		order:    list.New(),
+	}
+}
+
+func semanticMapKey(namespace, sourceKey string) string { return namespace + "\x00" + sourceKey }
+
+// Put stores a vector in its tenant namespace, refreshing an existing entry
+// and evicting the least-recently-used vector when at capacity.
 func (s *MemorySemanticStore) Put(_ context.Context, key SemanticKey, vector []float64) error {
 	namespace := key.Namespace()
+	mapKey := semanticMapKey(namespace, key.SourceKey)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	collection := s.index[namespace]
-	if collection == nil {
-		collection = map[string][]float64{}
-		s.index[namespace] = collection
+	if element, ok := s.entries[mapKey]; ok {
+		entry := element.Value.(*semanticEntry)
+		entry.vector = append([]float64(nil), vector...)
+		entry.storedAt = s.clock()
+		s.order.MoveToFront(element)
+		return nil
 	}
-	collection[key.SourceKey] = append([]float64(nil), vector...)
+	element := s.order.PushFront(&semanticEntry{
+		namespace: namespace, sourceKey: key.SourceKey,
+		vector: append([]float64(nil), vector...), storedAt: s.clock(),
+	})
+	s.entries[mapKey] = element
+	for len(s.entries) > s.capacity {
+		tail := s.order.Back()
+		if tail == nil {
+			break
+		}
+		s.remove(tail)
+	}
 	return nil
 }
 
@@ -70,14 +122,21 @@ func (s *MemorySemanticStore) Search(_ context.Context, key SemanticKey, query [
 	}
 	namespace := key.Namespace()
 	s.mu.Lock()
-	collection := s.index[namespace]
-	if collection == nil {
-		s.mu.Unlock()
-		return nil, nil
+	vectors := make(map[string][]float64, len(s.entries))
+	var expired []*list.Element
+	for element := s.order.Front(); element != nil; element = element.Next() {
+		entry := element.Value.(*semanticEntry)
+		if entry.namespace != namespace {
+			continue
+		}
+		if s.ttl > 0 && s.clock().Sub(entry.storedAt) > s.ttl {
+			expired = append(expired, element)
+			continue
+		}
+		vectors[entry.sourceKey] = append([]float64(nil), entry.vector...)
 	}
-	vectors := make(map[string][]float64, len(collection))
-	for sourceKey, vector := range collection {
-		vectors[sourceKey] = append([]float64(nil), vector...)
+	for _, element := range expired {
+		s.remove(element)
 	}
 	s.mu.Unlock()
 
@@ -89,7 +148,6 @@ func (s *MemorySemanticStore) Search(_ context.Context, key SemanticKey, query [
 		}
 		best = append(best, SemanticCandidate{SourceKey: sourceKey, Score: score})
 	}
-	// Stable order by score descending.
 	for i := 1; i < len(best); i++ {
 		for j := i; j > 0 && best[j].Score > best[j-1].Score; j-- {
 			best[j], best[j-1] = best[j-1], best[j]
@@ -99,6 +157,12 @@ func (s *MemorySemanticStore) Search(_ context.Context, key SemanticKey, query [
 		best = best[:limit]
 	}
 	return best, nil
+}
+
+func (s *MemorySemanticStore) remove(element *list.Element) {
+	entry := element.Value.(*semanticEntry)
+	delete(s.entries, semanticMapKey(entry.namespace, entry.sourceKey))
+	s.order.Remove(element)
 }
 
 // cosine returns the cosine similarity of two vectors, or NaN on zero norm.

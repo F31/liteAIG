@@ -114,6 +114,43 @@ func newTestProviderServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"object":"list","data":%s,"model":%q,"usage":{"prompt_tokens":1,"total_tokens":1}}`, mustJSON(data), request.Model)
 	})
+	mux.HandleFunc("POST /v1/audio/transcriptions", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r) {
+			return
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"transcribed"}`))
+	})
+	mux.HandleFunc("POST /v1/audio/translations", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r) {
+			return
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"translated"}`))
+	})
+	mux.HandleFunc("POST /v1/audio/speech", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r) {
+			return
+		}
+		var request struct {
+			Model string `json:"model"`
+			Voice string `json:"voice"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("fake-mp3"))
+	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server

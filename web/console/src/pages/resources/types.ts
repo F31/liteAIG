@@ -50,6 +50,7 @@ export type Deployment = {
   region?: string;
   capabilities?: string[];
   context_window?: number;
+  contextWindow?: number;
   priority?: number;
   status: string;
 };

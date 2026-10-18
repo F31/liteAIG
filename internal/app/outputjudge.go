@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/F31/liteAIG/internal/guardrail/judge"
+	"github.com/F31/liteAIG/internal/kernel"
 	"github.com/F31/liteAIG/internal/kernel/contracts"
 	"github.com/F31/liteAIG/internal/kernel/interaction"
 	"github.com/F31/liteAIG/internal/kernel/runtime"
@@ -23,6 +24,8 @@ const judgeCallTimeout = 8 * time.Second
 // deployment from the snapshot on demand.
 type snapshotJudge struct {
 	resolver *providerResolver
+	record   auxiliaryCallRecorder
+	reserve  auxiliaryReserver
 }
 
 // boundJudge implements guardrail/judge.Judge for one request's snapshot +
@@ -30,12 +33,24 @@ type snapshotJudge struct {
 type boundJudge struct {
 	inner    *snapshotJudge
 	snapshot *runtime.TenantRuntimeSnapshot
+	request  *kernel.RequestContext
 	model    string
 }
 
 var _ judge.Judge = (*boundJudge)(nil)
 
 func (j *boundJudge) Verdict(ctx context.Context, response, rubric string) (judge.JudgeResult, error) {
+	var policyID, reservationID string
+	var estimated int64
+	if j.inner.reserve != nil {
+		var reserveErr error
+		policyID, reservationID, estimated, reserveErr = j.inner.reserve(j.request, int64((len(response)+len(rubric)+3)/4))
+		if reserveErr != nil {
+			recordAuxiliaryCall("judge", "budget_blocked", 0)
+			return judge.JudgeResult{Passed: true, Reason: "judge skipped: budget limit", Score: 1}, nil
+		}
+	}
+	started := time.Now()
 	deployment, ok := capabilityDeployment(j.snapshot, j.model, "chat")
 	if !ok {
 		// No usable deployment for the judge model: skip the checkpoint.
@@ -64,10 +79,19 @@ func (j *boundJudge) Verdict(ctx context.Context, response, rubric string) (judg
 		},
 	})
 	if err != nil {
+		if j.inner.record != nil {
+			j.inner.record(ctx, j.request, "judge", j.model, deployment.ID, interaction.UnifiedUsage{}, time.Since(started), policyID, reservationID, estimated, err)
+		}
 		return judge.JudgeResult{}, err
 	}
 	if result == nil || result.Response == nil || len(result.Response.Choices) == 0 {
+		if j.inner.record != nil {
+			j.inner.record(ctx, j.request, "judge", j.model, deployment.ID, interaction.UnifiedUsage{}, time.Since(started), policyID, reservationID, estimated, fmt.Errorf("judge model returned no choices"))
+		}
 		return judge.JudgeResult{}, fmt.Errorf("judge model returned no choices")
+	}
+	if j.inner.record != nil {
+		j.inner.record(ctx, j.request, "judge", j.model, deployment.ID, result.Response.Usage, time.Since(started), policyID, reservationID, estimated, nil)
 	}
 	return parseJudgeVerdict(result.Response.Choices[0].Message.Content)
 }

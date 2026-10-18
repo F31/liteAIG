@@ -129,6 +129,7 @@ export type FinOpsView = {
   estimateVersion: string;
   byProject: {
     projectId: string;
+    projectName: string;
     requests: number;
     inputTokens: number;
     outputTokens: number;
@@ -162,6 +163,8 @@ export type FinOpsView = {
     title: string;
     detail: string;
     impact?: number;
+    detailKey?: string;
+    detailParams?: Record<string, unknown>;
   }[];
 };
 export type RecommendationView = {
@@ -180,7 +183,15 @@ export type RecommendationView = {
 export type RuntimeResources = {
   providers: unknown[];
   credentials: unknown[];
-  deployments: unknown[];
+  deployments: {
+    id: string;
+    providerId?: string;
+    model?: string;
+    region?: string;
+    status: string;
+    capabilities?: string[];
+    contextWindow?: number;
+  }[];
   logicalModels: unknown[];
   routes: unknown[];
   keys: unknown[];

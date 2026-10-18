@@ -312,7 +312,22 @@ type RerankPayload struct {
 	Documents []string
 	TopN      *int
 }
+
+// AudioOperation distinguishes the three canonical audio request shapes that
+// share RequestAudio: speech-to-text transcription, speech-to-text
+// translation, and text-to-speech synthesis (spec §5.1 P1 "audio").
+type AudioOperation string
+
+const (
+	AudioTranscription AudioOperation = "transcription"
+	AudioTranslation   AudioOperation = "translation"
+	AudioSpeech        AudioOperation = "speech"
+)
+
 type AudioPayload struct {
+	// Operation selects the audio endpoint. An empty value is treated as
+	// transcription for backward compatibility with the original surface.
+	Operation      AudioOperation
 	Filename       string
 	MediaType      string
 	Data           []byte
@@ -320,6 +335,12 @@ type AudioPayload struct {
 	Prompt         string
 	ResponseFormat string
 	Temperature    *float64
+
+	// Speech (text-to-speech) fields.
+	Input        string
+	Voice        string
+	Instructions string
+	Speed        *float64
 }
 type BatchPayload struct {
 	Operation        string
@@ -372,7 +393,13 @@ type UnifiedResponse struct {
 	ToolResult *ToolResult
 }
 
-type AudioResult struct{ Text string }
+// AudioResult carries either transcribed/translated text or synthesized audio
+// bytes, depending on the request operation.
+type AudioResult struct {
+	Text        string
+	Data        []byte
+	ContentType string
+}
 type BatchResult struct {
 	ID               string
 	Object           string

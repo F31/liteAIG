@@ -12,9 +12,9 @@ import (
 	"github.com/F31/liteAIG/internal/tenancy"
 )
 
-type ConfigRepository struct{ db *sql.DB }
+type ConfigRepository struct{ db DBTX }
 
-func NewConfigRepository(db *sql.DB) *ConfigRepository { return &ConfigRepository{db: db} }
+func NewConfigRepository(db DBTX) *ConfigRepository { return &ConfigRepository{db: db} }
 
 func (r *ConfigRepository) CreateDraft(ctx context.Context, scope tenancy.TenantScope, draft controlconfig.Draft) error {
 	if err := scope.Validate(); err != nil {

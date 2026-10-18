@@ -48,6 +48,7 @@ var tenantScopedTables = []rlsTable{
 	{name: "delegation_grants", using: `tenant_id = current_setting('app.tenant_id', true)`},
 	{name: "a2a_tasks", using: `tenant_id = current_setting('app.tenant_id', true)`},
 	{name: "a2a_push_outbox", using: `tenant_id = current_setting('app.tenant_id', true)`},
+	{name: "domain_event_outbox", using: `(tenant_id = current_setting('app.tenant_id', true) OR tenant_id IS NULL)`},
 	// Tables with nullable tenant_id may hold SYSTEM_SHARED/system-scope rows.
 	{name: "providers", using: `(tenant_id = current_setting('app.tenant_id', true)::uuid OR tenant_id IS NULL)`},
 	{name: "provider_credentials", using: `(tenant_id = current_setting('app.tenant_id', true)::uuid OR tenant_id IS NULL)`},
@@ -68,9 +69,32 @@ func EnableRLS(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE ROLE `+RolePlatform+` NOLOGIN BYPASSRLS`); err != nil {
 		// role already exists
 	}
+	if _, err := db.ExecContext(ctx, `ALTER ROLE `+RoleApp+` NOLOGIN NOSUPERUSER NOBYPASSRLS`); err != nil {
+		return fmt.Errorf("harden %s role: %w", RoleApp, err)
+	}
+	var currentUser string
+	if err := db.QueryRowContext(ctx, `SELECT current_user`).Scan(&currentUser); err != nil {
+		return fmt.Errorf("resolve current user for RLS grants: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `GRANT `+RoleApp+` TO `+quoteRoleIdent(currentUser)); err != nil {
+		return fmt.Errorf("grant %s to %s: %w", RoleApp, currentUser, err)
+	}
+	if _, err := db.ExecContext(ctx, `GRANT `+RolePlatform+` TO `+quoteRoleIdent(currentUser)); err != nil {
+		return fmt.Errorf("grant %s to %s: %w", RolePlatform, currentUser, err)
+	}
 	// Postgres 15+ revokes public schema USAGE by default; grant it to both roles.
 	if _, err := db.ExecContext(ctx, `GRANT USAGE ON SCHEMA public TO `+RoleApp+`, `+RolePlatform); err != nil {
 		return err
+	}
+	// Tenant pools still need to read global catalogs and system settings;
+	// RLS remains the binding restriction on tenant-scoped tables.
+	for _, statement := range []string{
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ` + RoleApp + `, ` + RolePlatform,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ` + RoleApp + `, ` + RolePlatform,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
 	}
 	for _, table := range tenantScopedTables {
 		if err := enableTableRLS(ctx, db, table); err != nil {
@@ -83,7 +107,6 @@ func EnableRLS(ctx context.Context, db *sql.DB) error {
 func enableTableRLS(ctx context.Context, db *sql.DB, table rlsTable) error {
 	statements := []string{
 		fmt.Sprintf(`ALTER TABLE %s ENABLE ROW LEVEL SECURITY`, table.name),
-		fmt.Sprintf(`ALTER TABLE %s FORCE ROW LEVEL SECURITY`, table.name),
 		fmt.Sprintf(`DROP POLICY IF EXISTS tenant_isolation ON %s`, table.name),
 		fmt.Sprintf(`CREATE POLICY tenant_isolation ON %s USING (%s)`, table.name, table.using),
 		fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %s`, table.name, RoleApp),
@@ -95,4 +118,15 @@ func enableTableRLS(ctx context.Context, db *sql.DB, table rlsTable) error {
 		}
 	}
 	return nil
+}
+
+// RLSEnabled reports whether the projects table has row-level security on.
+// It is a read-only startup diagnostic; EnableRLS still requires a
+// tenant-aware connection that sets app.tenant_id per request.
+func RLSEnabled(ctx context.Context, db *sql.DB) (bool, error) {
+	var enabled bool
+	if err := db.QueryRowContext(ctx, `SELECT relrowsecurity FROM pg_class WHERE relname = 'projects'`).Scan(&enabled); err != nil {
+		return false, err
+	}
+	return enabled, nil
 }

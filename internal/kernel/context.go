@@ -24,6 +24,7 @@ type RequestContext struct {
 	SelectedDeploymentID string
 	ProviderCost         *float64
 	Latency              time.Duration
+	TTFT                 time.Duration          // time to first delivered stream chunk
 	Err                  error                  // stage error captured before deferred accounting
 	CacheHit             bool                   // response was served from the Exact Cache
 	CachePending         bool                   // response should be written back to the Exact Cache

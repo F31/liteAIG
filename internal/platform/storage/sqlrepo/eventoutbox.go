@@ -34,9 +34,9 @@ type DomainEventOutboxSummary struct {
 	EarliestNextAttemptAt *time.Time
 }
 
-type DomainEventOutbox struct{ db *sql.DB }
+type DomainEventOutbox struct{ db DBTX }
 
-func NewDomainEventOutbox(db *sql.DB) *DomainEventOutbox { return &DomainEventOutbox{db: db} }
+func NewDomainEventOutbox(db DBTX) *DomainEventOutbox { return &DomainEventOutbox{db: db} }
 
 func (s *DomainEventOutbox) Enqueue(ctx context.Context, event contracts.DomainEvent) error {
 	if event.ID == "" || event.Kind == "" {

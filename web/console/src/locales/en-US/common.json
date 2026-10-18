@@ -70,7 +70,31 @@
     "model": "Model",
     "retries": "Retries",
     "fallbacks": "Fallbacks",
-    "samples": "samples"
+    "samples": "samples",
+    "recKind": {
+      "routing": "Routing",
+      "cache": "Cache",
+      "attribution": "Attribution",
+      "baseline": "Baseline"
+    },
+    "recTitle": {
+      "routing": "Review retry and fallback costs",
+      "cache": "Cache is avoiding duplicate provider calls",
+      "attribution": "Top project drives current spend",
+      "baseline": "No optimization signals yet"
+    },
+    "recDetail": {
+      "routing": "Retries or fallback attempts are adding provider spend. Check provider health and route ordering.",
+      "cache": "Cache hits avoided ~{{tokens}} provider tokens; {{priced}} were priced at {{version}} reference rates for an estimated ${{savings}} avoided cost ({{unpriced}} unpriced). This is not provider billing.",
+      "attribution": "Project {{project}} accounts for {{spend}} provider spend in the recent ledger window.",
+      "baseline": "Recent usage has no retry/fallback overhead or cache activity to act on."
+    },
+    "recConfigTitle": {
+      "routing": "Cost weight adjustment recommended"
+    },
+    "recConfigExplanation": {
+      "routing": "observed cost exceeded threshold"
+    }
   },
   "setup": {
     "title": "First-call setup",
@@ -168,6 +192,15 @@
     "selectPresetModel": "Select a preset model or type a custom model",
     "dataRegion": "Data region",
     "capabilities": "Capabilities",
+    "capabilitiesHelp": "Text (chat), vision, reasoning, tools, embedding, rerank, audio (STT) and speech (TTS). Routing enforces these as hard constraints.",
+    "capability_chat": "Text (chat)",
+    "capability_vision": "Vision",
+    "capability_reasoning": "Reasoning",
+    "capability_tools": "Tools",
+    "capability_embedding": "Embedding",
+    "capability_rerank": "Rerank",
+    "capability_audio": "Audio (STT)",
+    "capability_speech": "Speech (TTS)",
     "contextWindow": "Context window",
     "priority": "Priority",
     "createDeployment": "New model endpoint",

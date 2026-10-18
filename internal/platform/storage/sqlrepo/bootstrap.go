@@ -2,7 +2,6 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +11,10 @@ import (
 )
 
 type BootstrapRepository struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewBootstrapRepository(db *sql.DB) *BootstrapRepository {
+func NewBootstrapRepository(db DBTX) *BootstrapRepository {
 	return &BootstrapRepository{db: db}
 }
 

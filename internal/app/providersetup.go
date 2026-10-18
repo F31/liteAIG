@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/F31/liteAIG/internal/catalog"
 	"github.com/F31/liteAIG/internal/controlplane/config"
 	"github.com/F31/liteAIG/internal/controlplane/setup"
 	"github.com/F31/liteAIG/internal/kernel/contracts"
@@ -47,6 +48,7 @@ type realProviderSetup struct {
 	cipher   *secrets.Cipher
 	http     *http.Client
 	policy   egress.Policy
+	catalog  *sqlrepo.ResourceCatalogRepository
 
 	mu     sync.Mutex
 	probes map[string]providerProbe
@@ -56,6 +58,7 @@ func newRealProviderSetup(
 	ids contracts.IDGenerator, clock contracts.Clock, tenancyRepo tenancy.Repository,
 	configService *config.Service, configRepo config.Repository,
 	vault *sqlrepo.SecretVault, cipher *secrets.Cipher, client *http.Client, policy egress.Policy,
+	catalog *sqlrepo.ResourceCatalogRepository,
 ) *realProviderSetup {
 	if client == nil {
 		client = egress.Client(egress.LitePolicy())
@@ -65,7 +68,7 @@ func newRealProviderSetup(
 	}
 	return &realProviderSetup{
 		ids: ids, clock: clock, tenancy: tenancyRepo, config: configService, configDB: configRepo,
-		vault: vault, cipher: cipher, http: client, policy: policy, probes: map[string]providerProbe{},
+		vault: vault, cipher: cipher, http: client, policy: policy, catalog: catalog, probes: map[string]providerProbe{},
 	}
 }
 
@@ -270,9 +273,11 @@ func (p *realProviderSetup) ConfigureDefault(ctx context.Context, scope tenancy.
 	now := p.clock.Now()
 
 	providerType := probe.providerType
+	catalogProviderType := providerType
 	if providerType == "openai-compatible" {
 		providerType = "openai"
 	}
+	capabilities, contextWindow := p.resolveModelProfile(ctx, catalogProviderType, selectedModel)
 	doc := config.TenantConfig{
 		SchemaVersion: config.SchemaV1,
 		Tenant: config.TenantResource{
@@ -292,8 +297,8 @@ func (p *realProviderSetup) ConfigureDefault(ctx context.Context, scope tenancy.
 		}},
 		Deployments: []config.Deployment{{
 			ID: deploymentID, TenantID: scope.TenantID, ProviderID: providerID, CredentialID: credentialIDFromRef(probe.secretRef),
-			UpstreamModel: selectedModel, DataRegion: "global", Capabilities: []string{"chat"},
-			ContextWindow: 8192, Priority: 1, Status: "enabled",
+			UpstreamModel: selectedModel, DataRegion: "global", Capabilities: capabilities,
+			ContextWindow: contextWindow, Priority: 1, Status: "enabled",
 		}},
 		RoutePolicies: []config.RoutePolicy{{
 			ID: routeID, TenantID: scope.TenantID, ProjectID: projectID, Strategy: "priority",
@@ -317,6 +322,56 @@ func (p *realProviderSetup) ConfigureDefault(ctx context.Context, scope tenancy.
 		return fmt.Errorf("publish default tenant config: %w", err)
 	}
 	return nil
+}
+
+// resolveModelProfile resolves the selected model's capabilities and context
+// window from the resource catalog (the authoritative source). It falls back
+// to name-based inference and a conservative default window when the catalog
+// has no entry or is not wired. A catalog provider whose id matches the
+// provider type is preferred over a same-named model from another provider.
+func (p *realProviderSetup) resolveModelProfile(ctx context.Context, providerType, model string) ([]string, int) {
+	capabilities := config.InferCapabilities(model)
+	contextWindow := 8192
+	if p.catalog == nil || model == "" {
+		return capabilities, contextWindow
+	}
+	view, err := p.catalog.Catalog(ctx)
+	if err != nil {
+		return capabilities, contextWindow
+	}
+	item, ok := matchCatalogModel(view.Models, providerType, model)
+	if !ok {
+		return capabilities, contextWindow
+	}
+	if canonical := config.CanonicalCapabilities(item.Capabilities); len(canonical) > 0 {
+		capabilities = canonical
+	}
+	if item.ContextWindow != nil && *item.ContextWindow > 0 {
+		contextWindow = *item.ContextWindow
+	}
+	return capabilities, contextWindow
+}
+
+// matchCatalogModel selects the catalog entry for a model, preferring a
+// provider whose id matches the provider type over a same-named model from
+// another provider.
+func matchCatalogModel(models []catalog.ModelCatalogItem, providerType, model string) (catalog.ModelCatalogItem, bool) {
+	index := -1
+	for i, item := range models {
+		if item.Model != model {
+			continue
+		}
+		if item.ProviderID == providerType {
+			return item, true
+		}
+		if index < 0 {
+			index = i
+		}
+	}
+	if index < 0 {
+		return catalog.ModelCatalogItem{}, false
+	}
+	return models[index], true
 }
 
 func credentialIDFromRef(secretRef string) string {

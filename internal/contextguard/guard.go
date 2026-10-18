@@ -83,6 +83,10 @@ func estimateInputTokens(registry *tokenizer.Registry, request *interaction.Unif
 		for _, input := range request.Embedding.Inputs {
 			total += registry.EstimateTokens(model, input).Tokens
 		}
+	case request.Audio != nil:
+		if request.Audio.Operation == interaction.AudioSpeech {
+			total += registry.EstimateTokens(model, request.Audio.Input+"\n"+request.Audio.Instructions).Tokens
+		}
 	case request.Tool != nil:
 		total += registry.EstimateTokens(model, request.Tool.Name+"\n"+string(request.Tool.Arguments)+"\n"+request.Tool.Result).Tokens
 	}

@@ -13,9 +13,9 @@ import (
 // SystemConfigRepository persists the singleton system-level configuration
 // (A4 tenant policy defaults). The row carries no tenant scope; reads and
 // writes are restricted to the system_admin-gated Admin API surface.
-type SystemConfigRepository struct{ db *sql.DB }
+type SystemConfigRepository struct{ db DBTX }
 
-func NewSystemConfigRepository(db *sql.DB) *SystemConfigRepository {
+func NewSystemConfigRepository(db DBTX) *SystemConfigRepository {
 	return &SystemConfigRepository{db: db}
 }
 

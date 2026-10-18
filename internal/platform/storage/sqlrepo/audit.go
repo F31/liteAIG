@@ -2,15 +2,14 @@ package sqlrepo
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/F31/liteAIG/internal/observability/audit"
 )
 
 // AuditRepository reads the audit_events table.
-type AuditRepository struct{ db *sql.DB }
+type AuditRepository struct{ db DBTX }
 
-func NewAuditRepository(db *sql.DB) *AuditRepository { return &AuditRepository{db: db} }
+func NewAuditRepository(db DBTX) *AuditRepository { return &AuditRepository{db: db} }
 
 const defaultAuditLimit = 200
 

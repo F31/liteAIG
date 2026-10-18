@@ -168,6 +168,8 @@ func (s *Server) Handler() http.Handler {
 	e.Handle("POST /v1/embeddings", s.embeddings)
 	e.Handle("POST /v1/rerank", s.rerank)
 	e.Handle("POST /v1/audio/transcriptions", s.audioTranscriptions)
+	e.Handle("POST /v1/audio/translations", s.audioTranslations)
+	e.Handle("POST /v1/audio/speech", s.audioSpeech)
 	e.Handle("POST /v1/batches", s.batchCreate)
 	e.Handle("GET /v1/batches", s.batchList)
 	e.Handle("GET /v1/batches/{id}", s.batchRetrieve)
@@ -283,6 +285,36 @@ func (s *Server) audioTranscriptions(c *webkit.Context) error {
 		return nil
 	}
 	s.invoke(c.Response(), r, request, "openai", openaiProtocol{}, false, r.ContentLength)
+	return nil
+}
+
+func (s *Server) audioTranslations(c *webkit.Context) error {
+	r := c.Request()
+	request, err := openai.DecodeAudioTranslation(r.Header.Get("Content-Type"), http.MaxBytesReader(c.Response(), r.Body, s.cfg.MaxBodyBytes))
+	if err != nil {
+		writeOpenAIError(c.Response(), &kernelerrors.Error{Code: "INVALID_REQUEST", Message: "invalid audio translation request"}, "audio")
+		return nil
+	}
+	s.invoke(c.Response(), r, request, "openai", openaiProtocol{}, false, r.ContentLength)
+	return nil
+}
+
+// audioSpeech serves the OpenAI /v1/audio/speech text-to-speech surface. Unlike
+// the other audio endpoints the provider returns raw audio bytes, so the
+// response is relayed with its audio content type instead of JSON.
+func (s *Server) audioSpeech(c *webkit.Context) error {
+	r := c.Request()
+	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), r.Body, s.cfg.MaxBodyBytes))
+	if err != nil {
+		writeOpenAIError(c.Response(), err, "audio")
+		return nil
+	}
+	request, err := openai.DecodeAudioSpeech(body)
+	if err != nil {
+		writeOpenAIError(c.Response(), &kernelerrors.Error{Code: "INVALID_REQUEST", Message: "invalid audio speech request"}, "audio")
+		return nil
+	}
+	s.invoke(c.Response(), r, request, "openai", openaiProtocol{}, false, int64(len(body)))
 	return nil
 }
 
@@ -682,6 +714,12 @@ func (s *Server) invoke(w http.ResponseWriter, r *http.Request, request *interac
 }
 
 func (s *Server) render(w http.ResponseWriter, enc encoder, req *kernel.RequestContext, model string) {
+	// Text-to-speech carries raw audio bytes, not a JSON envelope.
+	if enc.name() == "openai" && req.Request != nil && req.Request.Kind == interaction.RequestAudio &&
+		req.Request.Audio != nil && req.Request.Audio.Operation == interaction.AudioSpeech {
+		writeAudioSpeech(w, req)
+		return
+	}
 	var payload []byte
 	var err error
 	switch enc.name() {
@@ -712,6 +750,50 @@ func (s *Server) render(w http.ResponseWriter, enc encoder, req *kernel.RequestC
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(payload)
+}
+
+// writeAudioSpeech relays synthesized audio with the provider's content type
+// (or the format the client requested when the provider omits it).
+func writeAudioSpeech(w http.ResponseWriter, req *kernel.RequestContext) {
+	data := []byte(nil)
+	contentType := ""
+	if req.Response != nil {
+		data = req.Response.RawContent
+		if req.Response.Audio != nil {
+			if len(req.Response.Audio.Data) > 0 {
+				data = req.Response.Audio.Data
+			}
+			contentType = req.Response.Audio.ContentType
+		}
+	}
+	if contentType == "" && req.Request.Audio != nil {
+		contentType = audioFormatContentType(req.Request.Audio.ResponseFormat)
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = w.Write(data)
+}
+
+// audioFormatContentType maps an OpenAI audio response_format to its MIME type.
+func audioFormatContentType(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "mp3":
+		return "audio/mpeg"
+	case "opus":
+		return "audio/ogg"
+	case "aac":
+		return "audio/aac"
+	case "flac":
+		return "audio/flac"
+	case "wav":
+		return "audio/wav"
+	case "pcm":
+		return "audio/pcm"
+	default:
+		return ""
+	}
 }
 
 func (s *Server) writeError(w http.ResponseWriter, anthropicProtocol bool, err error, protocol string) {

@@ -38,7 +38,7 @@ func TestInlineStreamGuardLatencyBudget(t *testing.T) {
 
 func TestShadowGuardRetroactiveBlockStopsOutput(t *testing.T) {
 	provider := blockingProvider{result: ExternalResult{Blocked: true}}
-	guard := NewShadowGuard(provider, func(retroactive bool) {
+	guard := NewShadowGuard(provider, ExternalFailOpen, func(retroactive bool) {
 		if !retroactive {
 			t.Fatal("violation must be reported as retroactive")
 		}
@@ -54,6 +54,28 @@ func TestShadowGuardRetroactiveBlockStopsOutput(t *testing.T) {
 	// Stop is idempotent.
 	guard.Stop()
 	guard.Stop()
+}
+
+func TestShadowGuardFailClosedStopsOutputOnProviderError(t *testing.T) {
+	guard := NewShadowGuard(failingProvider{}, ExternalFailClosed, func(retroactive bool) {
+		if !retroactive {
+			t.Fatal("fail-closed outage must be reported")
+		}
+	})
+	guard.Submit(context.Background(), ExternalRequest{ContentHash: "h"}, "released")
+	deadline := time.Now().Add(time.Second)
+	for guard.Allow() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if guard.Allow() {
+		t.Fatal("fail-closed guard did not stop output after provider error")
+	}
+}
+
+type failingProvider struct{}
+
+func (failingProvider) Evaluate(context.Context, ExternalRequest) (ExternalResult, error) {
+	return ExternalResult{}, ErrExternalUnavailable
 }
 
 type blockingProvider struct{ result ExternalResult }

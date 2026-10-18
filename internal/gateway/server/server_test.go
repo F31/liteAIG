@@ -127,6 +127,57 @@ func TestAudioTranscriptionRoute(t *testing.T) {
 	}
 }
 
+func TestAudioTranslationRoute(t *testing.T) {
+	server := httptest.NewServer(New(audioCore{}, Config{MaxBodyBytes: 1024}).Handler())
+	defer server.Close()
+	resp, data := audioMultipartRequest(t, server.URL+"/v1/audio/translations")
+	if resp.StatusCode != http.StatusOK || string(data) != `{"text":"hello audio"}` {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+	}
+}
+
+func TestAudioSpeechRoute(t *testing.T) {
+	server := httptest.NewServer(New(speechCore{}, Config{MaxBodyBytes: 1024}).Handler())
+	defer server.Close()
+	resp, body := post(t, server.URL+"/v1/audio/speech", `{"model":"tts-1","input":"hello","voice":"alloy","response_format":"mp3"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("speech status=%d body=%s", resp.StatusCode, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "audio/mpeg" {
+		t.Fatalf("content-type=%q", ct)
+	}
+	if body != "mp3-bytes" {
+		t.Fatalf("speech body=%q", body)
+	}
+}
+
+func audioMultipartRequest(t *testing.T, url string) (*http.Response, []byte) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("model", "whisper-1")
+	part, err := writer.CreateFormFile("file", "sample.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("audio-bytes"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp, data
+}
+
 func TestBatchCreateRoute(t *testing.T) {
 	store := &batchMappingStore{models: map[string]string{}, fileModels: map[string]string{}}
 	server := httptest.NewServer(New(batchCore{}, Config{MaxBodyBytes: 1024, BatchMappings: store}).Handler())
@@ -369,6 +420,25 @@ func (audioCore) Models(context.Context, string, string) (*openai.ModelsResponse
 	return &openai.ModelsResponse{}, nil
 }
 func (audioCore) Tool(context.Context, AdmitInput) (*interaction.UnifiedResponse, error) {
+	return nil, nil
+}
+
+type speechCore struct{}
+
+func (speechCore) Admit(_ context.Context, input AdmitInput) (*kernel.RequestContext, error) {
+	return &kernel.RequestContext{Request: input.Request}, nil
+}
+func (speechCore) Run(_ context.Context, req *kernel.RequestContext, _ contracts.StreamWriter) error {
+	if req.Request.Kind != interaction.RequestAudio || req.Request.Audio.Operation != interaction.AudioSpeech || req.Request.Audio.Input != "hello" || req.Request.Audio.Voice != "alloy" {
+		return &kernelerrors.Error{Code: "INVALID_REQUEST", Message: "bad speech"}
+	}
+	req.Response = &interaction.UnifiedResponse{RawContent: []byte("mp3-bytes"), Audio: &interaction.AudioResult{Data: []byte("mp3-bytes"), ContentType: "audio/mpeg"}}
+	return nil
+}
+func (speechCore) Models(context.Context, string, string) (*openai.ModelsResponse, error) {
+	return &openai.ModelsResponse{}, nil
+}
+func (speechCore) Tool(context.Context, AdmitInput) (*interaction.UnifiedResponse, error) {
 	return nil, nil
 }
 

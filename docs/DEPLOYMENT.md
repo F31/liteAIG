@@ -28,16 +28,42 @@ Notes that apply to both:
 ## Configuration
 
 - CLI flags: `--db`, `--mode`, `--admin-addr`, `--ready-addr`, `--gateway-addr`,
-  `--coordinator-url`, `--webhook-url`, SMTP flags, etc. (`--help`).
+  `--coordinator`, `--postgres-rls`, `--postgres-tenant-pools`, `--webhook-url`,
+  SMTP flags, etc. (`--help`).
+- AI traffic tuning: `--gateway-max-body-bytes` (default 1 MiB; raise for
+  audio/vision/files), `--attempt-timeout`, `--total-timeout`,
+  `--stream-total-timeout` (0 = no overall stream deadline),
+  `--stream-idle-timeout`, `--first-token-timeout`, `--provider-timeout`.
+- Cache tuning: `--exact-cache-capacity` (Lite only; ignored with
+  `--coordinator`), `--semantic-cache-capacity` (default 1024),
+  `--semantic-cache-ttl` (0 keeps vectors until LRU eviction).
+- Layer 3 guardrail: `--external-guardrail-url`, `--external-guardrail-token`,
+  `--external-guardrail-timeout`, `--external-guardrail-fail-mode`
+  (`fail_open`, `fail_closed`, or `bypass`); the endpoint uses the same
+  egress/SSRF policy as model connectors.
 - Environment for secrets/telemetry: `LITEAIG_MASTER_KEY`, `LITEAIG_OTLP_ENDPOINT`,
   provider secrets (resolved via the secret provider / env refs).
 - Health: `--ready-addr` serves `/healthz` (process) and `/readyz` (gated on a
   published tenant runtime); the container probes readiness with these.
+- PostgreSQL RLS: enabled by default for PostgreSQL. Tenant-scoped data-plane
+  and Admin requests use per-tenant pools as `liteaig_app` with
+  `app.tenant_id` set on connect; control-plane/background work uses the
+  trusted platform pool. The DB user needs permission to create/grant the
+  `liteaig_app`/`liteaig_platform` roles. `--postgres-rls=false` is a
+  controlled rollback to repository-scope-only isolation.
+- Postgres connection budget: the platform pool is capped at 32 connections;
+  each lazy tenant pool uses at most 2, and `--postgres-tenant-pools` (default
+  16) bounds the number of tenant pools. On a default `max_connections=100`
+  this keeps the worst case at 64; raise the pool count only after sizing
+  Postgres accordingly.
 
 ## Delivery pipeline
 
 - `ci.yml` `image` job builds the image and smoke-probes a container on every
   PR/push (non-root, mounted data dir, admin origin responding).
+- `internal/app/gateway_load_smoke_test.go` is the PR-level gateway load gate:
+  real auth/admission/routing/provider/accounting path, with RPS, p99 and error
+  SLO floors.
 - `ci.yml` also gates on `govulncheck`, production `npm audit`, and Kubernetes
   manifest validation (`scripts/check-k8s.sh`: Helm lint/template plus strict
   kubeconform in CI).
