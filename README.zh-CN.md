@@ -104,43 +104,158 @@ LiteAIG 是一个模块化单体、单二进制优先的 AI 网关。它把模�
 
 ## 技术架构
 
+LiteAIG 是一个**固定管线微内核**，不是线性代理链。微内核只负责 Canonical Interaction、七阶段管线、不可变租户快照与受控扩展端口；协议适配器、治理组件、连接器、状态存储与控制面围绕它组合。**Lite 是部署形态，不是另一套架构。**
+
+### 设计原则
+
+| 原则 | LiteAIG 的落地方式 |
+|---|---|
+| **微内核** | Kernel 只依赖 contracts：Canonical Interaction、Pipeline Engine、Runtime Snapshot、Extension Ports。具体 Provider、存储与 UI 都在核外。由 `architecture/forbidden-imports.yaml` 强制。 |
+| **组件化** | Admission、Guardrail、Cache、Resolution/Budget、Execution、Accounting、Telemetry 是独立治理组件，接口窄、边界清晰。Connector 不承载策略。 |
+| **轻量敏捷** | Lite 是单进程 + SQLite + 内存状态；Standard 增加 PostgreSQL + Redis 与可选分离平面。不强制 Kubernetes、Envoy 或 Python 运行时。 |
+| **性能高效** | 热路径使用内存快照、精确/语义缓存；Redis 用于跨副本预算/租约与共享精确缓存。Usage、Audit、Telemetry 通过 Spool/Outbox 离开热路径。 |
+| **安全可靠** | 显式划分 Ingress、Admin、Tenant、Egress、Supply Chain 边界；RLS、Secret Resolver、签名 RuntimeBundle、LKG、熔断与优雅 Drain。 |
+
+### 逻辑架构
+
 ```mermaid
-flowchart LR
-  C[客户端: OpenAI / Anthropic / MCP / A2A] --> G[LiteAIG Gateway]
-  A[管理 Console] --> CP[Control Plane]
-  CP --> DB[(SQLite / PostgreSQL)]
-  CP --> RB[Signed RuntimeBundle]
-  RB --> G
-  G --> P[固定七阶段 Pipeline]
-  P --> RT[路由与执行韧性]
-  RT --> PR[模型 / 工具 / Agent Provider]
-  G <--> RD[(Redis 协调: Standard)]
-  P --> O[OTLP / ClickHouse / Webhook / Audit]
+flowchart TB
+  subgraph EDGE["Ingress / Edge"]
+    C["客户端: OpenAI SDK · Anthropic SDK · MCP · A2A"]
+    FP["可选前置代理: TLS · WAF · L7"]
+  end
+
+  subgraph DP["Data Plane — Lite: 单进程 · Standard: N 副本"]
+    AD["协议适配器<br/>OpenAI | Anthropic | MCP | A2A"]
+
+    subgraph KERNEL["治理微内核"]
+      SNAP["不可变租户快照"]
+      PIPE["固定七阶段管线"]
+      PORTS["受控扩展端口<br/>auth · guardrail · cache · routing · budget · execution · accounting · telemetry"]
+    end
+
+    COMP["治理组件<br/>Admission · Guardrail · Cache · Resolution/Budget<br/>Execution · Accounting · Audit/Telemetry"]
+    CONN["连接器<br/>Model · MCP Tool · A2A Agent"]
+    EXT["外部护栏<br/>(optional)"]
+    EGR["Egress Policy + Secret Resolver"]
+  end
+
+  subgraph CTL["控制面 — 可选拆分，绝不在热路径"]
+    UI["内嵌 Console"]
+    API["Admin API"]
+    CMP["Config Compiler / Validator"]
+    SIG["Bundle Signer"]
+    IDP["Local Auth / OIDC"]
+  end
+
+  subgraph STATE["状态与协调"]
+    DB[("SQLite / PostgreSQL<br/>RLS + 租户连接池")]
+    RD[("Redis — Standard<br/>budget · leases · exact cache")]
+    BUN["签名 RuntimeBundle + LKG"]
+    SPL["Accounting Spool"]
+    OUT["Event / A2A Outbox"]
+  end
+
+  subgraph OPS["可观测性与运维"]
+    OTLP["OTLP"]
+    PROM["Prometheus"]
+    CH["ClickHouse"]
+    ALERT["Webhook / Email"]
+    RUN["Health · Drain · Backup / DR"]
+  end
+
+  C --> FP
+  FP --> AD
+  AD --> PIPE
+  PIPE --> COMP
+  COMP -->|resolution / execution| CONN
+  CONN --> EGR
+  COMP -.->|optional| EXT
+  EXT --> EGR
+  SNAP -.->|feeds| PIPE
+  PORTS -.->|implemented by| COMP
+
+  UI --> API
+  API --> CMP
+  API --> IDP
+  CMP --> SIG
+  SIG --> BUN
+  BUN -.->|pull / atomic activate| SNAP
+  CMP --> DB
+
+  COMP -.->|accounting / audit| SPL
+  SPL --> DB
+  COMP -.->|events| OUT
+  OUT --> DB
+  PIPE -.->|Standard only| RD
+  RD -.->|Standard only| PIPE
+
+  COMP -.->|async telemetry| OTLP
+  COMP -.->|async telemetry| PROM
+  COMP -.->|async telemetry| CH
+  COMP -.->|async telemetry| ALERT
+  RUN -.-> PIPE
 ```
 
-### 核心组件
+实线表示同步请求/控制路径，虚线表示异步或特定部署形态。该图是逻辑视图：
+Lite 在同一进程中运行相同的组件。
 
-| 组件 | 职责 |
+**微内核 vs 组件 vs 适配器**
+
+| 层 | 负责 | 不应负责 |
+|---|---|---|
+| **Kernel** | Canonical Interaction、固定阶段顺序、快照语义、扩展契约 | Provider SDK、SQL、UI、厂商特定策略 |
+| **治理组件** | 各自单一策略域：准入、护栏、缓存、路由/预算、执行、记账、遥测 | 跨域副作用或直接调用 Provider |
+| **适配器 / 连接器** | 线协议与上游翻译 | 认证、预算、审计等治理决策 |
+| **控制面** | 配置编译/校验/发布、签名、Admin API、Console、身份 | 请求路径执行 |
+| **状态** | 持久配置、账本、审计、预算、租约、Bundle、Spool/Outbox | 把业务策略埋进存储 |
+
+### 请求生命周期
+
+```mermaid
+flowchart LR
+  C[客户端] --> A[1 Admission]
+  A --> G[2 Input Guardrail]
+  G --> CA[3 Cache]
+  CA -->|miss| R[4 Resolution + Budget]
+  R --> E[5 Execution / Failover]
+  E --> P[Model / MCP / A2A Providers]
+  P --> O[6 Output Guardrail]
+  O --> CL[客户端]
+  CA -->|hit| O
+
+  A -.->|snapshot| S[(Tenant Snapshot)]
+  R -.->|reserve| B[(Budget / Redis)]
+  O --> AC[7 Accounting / Audit]
+  AC -.->|async spool| DB[(DB)]
+  AC -.->|async| OBS[OTLP / ClickHouse / Webhook]
+```
+
+实线是同步请求路径，虚线是持久化但异步的尾路径：缓存命中仍需经过输出护栏与记账阶段；记账/遥测不会阻塞 Provider 流式响应。
+
+### 部署剖面
+
+| 维度 | Lite | Standard |
+|---|---|---|
+| 进程拓扑 | 单个 `mode=all` 进程 | `gateway` / `control` 分离副本 |
+| 配置 | SQLite + Master Key Sidecar | PostgreSQL + 签名 RuntimeBundle |
+| 协调 | 进程内 | PostgreSQL 租约 + Redis 账本/租约 |
+| 缓存 | 进程内精确缓存 + 有界语义缓存 | Redis 精确缓存 + 进程内语义缓存 |
+| 故障行为 | 重启并从本地状态恢复 | 控制面故障保留 LKG；副本故障由 HPA/PDB 处理 |
+| 运维 | 极简单二进制 | HPA/PDB、Drain、多副本、外部存储 |
+
+### 安全与可靠性边界
+
+| 边界 | 控制 |
 |---|---|
-| `internal/kernel` | Canonical Interaction、Pipeline Contracts、Runtime Snapshot |
-| `internal/access/protocol` | OpenAI/Anthropic/MCP/A2A 线协议适配 |
-| `internal/gateway` | 准入、护栏、缓存、路由、执行、流式处理 |
-| `internal/connectors` | 模型、工具、Agent 连接器，统一受 egress 策略约束 |
-| `internal/controlplane` | 配置编译/发布/回滚、Admin API、Console 后端 |
-| `internal/finops` | 预算、记账、定价、Chargeback |
-| `internal/federation` | A2A 信任、委托、Push Outbox |
-| `internal/platform` | 存储、协调、加密、egress、可观测性 |
-| `web/console` | 内嵌 React Console |
-| `cmd/liteaig` | 组合根与单二进制入口 |
+| **Ingress** | Virtual API Key、请求体上限、可选 TLS/WAF/L7 前置代理 |
+| **Admin** | 独立监听、本地 Argon2id 或 OIDC、CSRF、RBAC |
+| **Tenant** | 不可变运行时快照、tenant context、PostgreSQL RLS + 租户连接池 |
+| **Egress** | 统一 allowlist/SSRF 策略、Secret Resolver、外部护栏隔离 |
+| **Supply Chain** | 签名 RuntimeBundle、LKG 兜底、非 root distroless 镜像、发布 SBOM |
+| **Audit** | 脱敏 Domain Event、Evidence Export、持久 Spool/Outbox、OTLP 日志 |
 
-### 创新点
-
-1. **Governance by construction。** 管线固定且由 CI 守护。扩展只能挂接既有阶段的检查点，不存在任意阶段重排或绕过路径。
-2. **Compile once, sign, activate。** 配置校验后编译为不可变租户快照；控制面签名 RuntimeBundle；Gateway 原子激活，校验或签名失败时保留 LKG。
-3. **一套契约，两档交付。** Lite 使用 SQLite 单进程；Standard 使用 PostgreSQL + Redis 分离平面。数据面行为与治理语义保持一致。
-4. **Agentic 信任不是外挂。** A2A/MCP 与模型调用共享同一准入、预算、审批、记账与审计路径。
-5. **FinOps 与审计在请求路径内。** 预算预留、Token 对账、证据与成本归因不是批处理报表的附属品。
-6. **极小运维足迹。** 静态 Go 二进制、distroless 非 root 镜像、内嵌 Console，无强制外部运行时。
+控制面不可用时，数据面可继续使用 last-known-good 快照服务。Standard 档通过 Redis 协调预算与租约；Lite 档不依赖 Redis。
 
 ---
 
@@ -150,22 +265,22 @@ flowchart LR
 
 | 维度 | **LiteAIG** | **LiteLLM** | **Higress** | **Kong AI Gateway** |
 |---|---|---|---|---|
-| 核心定位 | AI 治理与 Agentic Traffic Control Plane | LLM Proxy/SDK 与 Provider 抽象 | 云原生 API Gateway + AI 插件 | 企业 API Gateway + AI 插件 |
-| 运行时 | Go，单静态二进制 | Python 服务/SDK | Envoy/Istio，Kubernetes 原生 | Nginx/OpenResty，Kong 平台 |
-| 配置模型 | 编译期校验快照 + 签名 Bundle | YAML + Python callback/hook | Kubernetes CRD + Wasm 插件 | Kong Entity + 插件配置 |
+| 核心定位 | AI 治理与 Agentic Traffic Control Plane | LLM Proxy/SDK + MCP/Agent Gateway | 云原生 API Gateway + AI/MCP/Agent 插件 | 企业级 AI Gateway + AI 实体与策略 |
+| 运行时 | Go，单静态二进制 | Python 服务/SDK | Envoy/Istio，Kubernetes 原生或独立 Docker | Nginx/OpenResty，Kong Gateway CP/DP |
+| 配置模型 | 编译期校验快照 + 签名 Bundle | YAML + Python callback/hook | Kubernetes CRD/Gateway API + Wasm | Kong Entity + AI Policy/Plugin，decK/kongctl/Terraform |
 | 扩展机制 | 固定管线 + 受控检查点；编译期注册与受控外部护栏 Hook | Python 生态与 callback | Wasm 插件生态、CRD | 大型插件生态；Lua/Go/Python/JS |
 | Provider 覆盖 | OpenAI、Anthropic、Azure、Bedrock、Vertex、Gemini、Compatible | 非常广泛的多 Provider 目录 | 通过 AI 插件支持广泛 Provider | 通过 AI 插件支持广泛 Provider |
-| 治理深度 | 固定七阶段、预算、TPM/RPM、RLS、审计、证据 | Virtual Key、预算、限流、路由、缓存、Guardrail | L7 策略、Token 限制、WAF、AI Guardrail/Cache | AI 限流、Prompt Guard、PII、Semantic Cache |
-| Agentic | A2A 0.3/1.0、MCP Tools/Tasks、审批、联邦、信任 | 非主要方向 | MCP/AI Gateway 能力；A2A 信任非主要方向 | MCP Proxy 与 AI 插件；A2A 信任非主要方向 |
-| 部署 | Binary、Docker、Helm；SQLite 或 PostgreSQL + Redis | Python 服务 + DB/Redis | Kubernetes | Kong Gateway 部署 |
-| 最适合 | 强治理、A2A/MCP 控制、FinOps、从边缘到 HA | 在 Python 生态中快速接入大量 Provider | 已使用 Envoy/Istio、需要 L7 + AI 的平台团队 | 已标准化在 Kong 上的企业 |
+| 治理模型 | 固定七阶段、预算、TPM/RPM、RLS、审计、证据 | Virtual Key、预算、限流、路由、缓存、护栏、异步 Spend Logging | L7/WAF、AI Token 限制、缓存、内容安全、配额 | AI 限流、Prompt/Semantic Guard、PII、Semantic Cache、成本管理 |
+| Agentic / MCP | A2A 0.3/1.0 + MCP Tools/Tasks，同一治理路径，审批、联邦/信任 | MCP Gateway + Agent Gateway（A2A）；Router 中心 | MCP Server + AI Agent；插件中心 | AI MCP Server + A2A 流量 + AI Policy |
+| 部署 | Binary、Docker、Helm；SQLite 或 PostgreSQL + Redis | Python 服务 + DB/Redis | Kubernetes 或 Docker | Konnect 或自托管 Kong CP/DP |
+| 最适合 | 强治理、A2A/MCP 控制、FinOps、轻量运维 | 在 Python 生态中快速接入大量 Provider | 已使用 Envoy/Istio、需要 L7 + AI 的平台团队 | 已标准化在 Kong 上的企业 |
 
 **取舍一览**
 
 - **LiteAIG**：Provider 目录与插件生态小于成熟网关，且不是通用 L7/WAF 网关；当治理语义与轻量运维优先时最合适。
-- **LiteLLM**：在 Python 生态中接大量 Provider 最快；对固定治理管线与 Agent 信任的约束较弱。
-- **Higress**：Kubernetes/Envoy 集成与插件覆盖出色；需要云原生数据面与 K8s 运维模型。
-- **Kong AI Gateway**：成熟的企业网关与插件生态；需要 Kong 平台、数据库/控制面运维，并考虑许可成本。
+- **LiteLLM**：Provider 目录与 Python 生态非常成熟；治理模型更偏 Proxy/Router 中心，而不是固定治理管线。
+- **Higress**：Kubernetes/Envoy 集成与 Wasm 插件覆盖出色；需要云原生数据面与 K8s 运维模型。
+- **Kong AI Gateway**：成熟的企业网关、AI 实体与大型插件生态；需要 Kong 平台、CP/DP 运维，并考虑许可成本。
 
 **选择 LiteAIG 的典型场景**：治理、成本归因、审计、A2A/MCP 信任与较小运维足迹，比“最大 Provider 目录”或“通用 L7 插件生态”更重要。
 

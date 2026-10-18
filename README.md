@@ -148,54 +148,167 @@ Every model, MCP, and A2A request goes through:
 
 ## Architecture
 
+LiteAIG is a **fixed-pipeline microkernel**, not a linear proxy chain. A small
+kernel owns the canonical interaction model, the seven-stage pipeline,
+immutable tenant snapshots, and controlled extension ports. Protocol adapters,
+governance components, connectors, stores, and the control plane attach around
+it. **Lite is a deployment profile, not a different architecture.**
+
+### Design principles
+
+| Principle | How LiteAIG applies it |
+|---|---|
+| **Microkernel** | Kernel depends only on contracts: canonical interaction, pipeline engine, runtime snapshot, extension ports. Concrete providers, stores, and UI live outside. Enforced by `architecture/forbidden-imports.yaml`. |
+| **Componentization** | Admission, guardrail, cache, resolution/budget, execution, accounting, and telemetry are separate governed components with narrow interfaces. Connectors never own policy. |
+| **Lightweight & agile** | Lite is one process with SQLite and in-memory state. Standard adds PostgreSQL + Redis and optional split planes. No mandatory Kubernetes, Envoy, or Python runtime. |
+| **High performance** | The hot path uses in-memory snapshots, exact/semantic cache, and Redis for cross-replica budgets/leases and shared exact cache. Usage, audit, and telemetry leave the hot path through spool/outbox. |
+| **Secure & reliable** | Explicit ingress, admin, tenant, egress, and supply-chain boundaries; RLS; secret resolver; signed RuntimeBundle; last-known-good; circuit breaking; graceful drain. |
+
+### Logical architecture
+
 ```mermaid
-flowchart LR
-  C[Clients: OpenAI / Anthropic / MCP / A2A] --> G[LiteAIG Gateway]
-  A[Admin Console] --> CP[Control Plane]
-  CP --> DB[(SQLite / PostgreSQL)]
-  CP --> RB[Signed RuntimeBundle]
-  RB --> G
-  G --> P[Fixed 7-stage Pipeline]
-  P --> RT[Routing & Resilience]
-  RT --> PR[Model / Tool / Agent Providers]
-  G <--> RD[(Redis coordination: Standard)]
-  P --> O[OTLP / ClickHouse / Webhooks / Audit]
+flowchart TB
+  subgraph EDGE["Ingress / Edge"]
+    C["Clients: OpenAI SDK · Anthropic SDK · MCP · A2A"]
+    FP["Optional front proxy: TLS · WAF · L7"]
+  end
+
+  subgraph DP["Data Plane — Lite: one process · Standard: N replicas"]
+    AD["Protocol Adapters<br/>OpenAI | Anthropic | MCP | A2A"]
+
+    subgraph KERNEL["Governance Microkernel"]
+      SNAP["Immutable Tenant Snapshot"]
+      PIPE["Fixed 7-Stage Pipeline"]
+      PORTS["Controlled Extension Ports<br/>auth · guardrail · cache · routing · budget · execution · accounting · telemetry"]
+    end
+
+    COMP["Governed Components<br/>Admission · Guardrail · Cache · Resolution/Budget<br/>Execution · Accounting · Audit/Telemetry"]
+    CONN["Connectors<br/>Model · MCP Tool · A2A Agent"]
+    EXT["External Guardrail<br/>(optional)"]
+    EGR["Egress Policy + Secret Resolver"]
+  end
+
+  subgraph CTL["Control Plane — optional split, never on the hot path"]
+    UI["Embedded Console"]
+    API["Admin API"]
+    CMP["Config Compiler / Validator"]
+    SIG["Bundle Signer"]
+    IDP["Local Auth / OIDC"]
+  end
+
+  subgraph STATE["State & Coordination"]
+    DB[("SQLite / PostgreSQL<br/>RLS + tenant pools")]
+    RD[("Redis — Standard<br/>budget · leases · exact cache")]
+    BUN["Signed RuntimeBundle + LKG"]
+    SPL["Accounting Spool"]
+    OUT["Event / A2A Outbox"]
+  end
+
+  subgraph OPS["Observability & Operations"]
+    OTLP["OTLP"]
+    PROM["Prometheus"]
+    CH["ClickHouse"]
+    ALERT["Webhook / Email"]
+    RUN["Health · Drain · Backup / DR"]
+  end
+
+  C --> FP
+  FP --> AD
+  AD --> PIPE
+  PIPE --> COMP
+  COMP -->|resolution / execution| CONN
+  CONN --> EGR
+  COMP -.->|optional| EXT
+  EXT --> EGR
+  SNAP -.->|feeds| PIPE
+  PORTS -.->|implemented by| COMP
+
+  UI --> API
+  API --> CMP
+  API --> IDP
+  CMP --> SIG
+  SIG --> BUN
+  BUN -.->|pull / atomic activate| SNAP
+  CMP --> DB
+
+  COMP -.->|accounting / audit| SPL
+  SPL --> DB
+  COMP -.->|events| OUT
+  OUT --> DB
+  PIPE -.->|Standard only| RD
+  RD -.->|Standard only| PIPE
+
+  COMP -.->|async telemetry| OTLP
+  COMP -.->|async telemetry| PROM
+  COMP -.->|async telemetry| CH
+  COMP -.->|async telemetry| ALERT
+  RUN -.-> PIPE
 ```
 
-### Core components
+Solid edges are synchronous request/control paths; dotted edges are asynchronous
+or deployment-specific. The diagram is intentionally a logical view: Lite runs
+the same components in one process.
 
-| Component | Responsibility |
+**Kernel vs components vs adapters**
+
+| Layer | Owns | Must not own |
+|---|---|---|
+| **Kernel** | Canonical interaction, fixed stage order, snapshot semantics, extension contracts | Provider SDKs, SQL, UI, vendor-specific policy |
+| **Governed components** | One policy domain each: admission, guardrail, cache, routing/budget, execution, accounting, telemetry | Cross-domain side effects or direct provider calls |
+| **Adapters / connectors** | Wire protocols and upstream translation | Auth, budget, audit, or other governance decisions |
+| **Control plane** | Config compile/validate/publish, signing, Admin API, Console, identity | Request-path execution |
+| **State** | Durable config, ledger, audit, budgets, leases, bundles, spool/outbox | Business policy embedded in storage |
+
+### Request lifecycle
+
+```mermaid
+flowchart LR
+  C[Client] --> A[1 Admission]
+  A --> G[2 Input Guardrail]
+  G --> CA[3 Cache]
+  CA -->|miss| R[4 Resolution + Budget]
+  R --> E[5 Execution / Failover]
+  E --> P[Model / MCP / A2A Providers]
+  P --> O[6 Output Guardrail]
+  O --> CL[Client]
+  CA -->|hit| O
+
+  A -.->|snapshot| S[(Tenant Snapshot)]
+  R -.->|reserve| B[(Budget / Redis)]
+  O --> AC[7 Accounting / Audit]
+  AC -.->|async spool| DB[(DB)]
+  AC -.->|async| OBS[OTLP / ClickHouse / Webhook]
+```
+
+The solid path is the synchronous request path. The dotted path is durable but
+asynchronous: a cache hit still passes the output guardrail and accounting
+stage, and accounting/telemetry never block the provider stream.
+
+### Deployment profiles
+
+| Aspect | Lite | Standard |
+|---|---|---|
+| Process topology | One `mode=all` process | Split `gateway` / `control` replicas |
+| Configuration | SQLite + master-key sidecar | PostgreSQL + signed RuntimeBundle |
+| Coordination | In-process | PostgreSQL leases + Redis ledger/leases |
+| Cache | In-process exact + bounded semantic | Redis exact cache + in-process semantic |
+| Failure behavior | Restart and recover from local state | Control-plane outage keeps LKG; replica loss handled by HPA/PDB |
+| Operations | Minimal single binary | HPA/PDB, drain, multi-replica, external stores |
+
+### Security and reliability boundaries
+
+| Boundary | Controls |
 |---|---|
-| `internal/kernel` | Canonical interaction model, pipeline contracts, runtime snapshot |
-| `internal/access/protocol` | OpenAI/Anthropic/MCP/A2A wire adapters |
-| `internal/gateway` | Admission, guardrails, cache, routing, execution, streaming |
-| `internal/connectors` | Provider, tool, and agent connectors behind egress policy |
-| `internal/controlplane` | Config compile/publish/rollback, Admin API, Console backend |
-| `internal/finops` | Budgets, accounting, pricing, chargeback |
-| `internal/federation` | A2A trust, delegation, push outbox |
-| `internal/platform` | Storage, coordination, crypto, egress, observability |
-| `web/console` | Embedded React Console |
-| `cmd/liteaig` | Composition root and single-binary entry point |
+| **Ingress** | Virtual API keys, body limits, optional TLS/WAF/L7 front proxy |
+| **Admin** | Separate listener, local Argon2id or OIDC, CSRF, RBAC |
+| **Tenant** | Immutable runtime snapshot, tenant context, PostgreSQL RLS + scoped pools |
+| **Egress** | Unified allowlist/SSRF policy, secret resolver, external guardrail isolation |
+| **Supply chain** | Signed RuntimeBundle, LKG fallback, non-root distroless image, SBOM in release |
+| **Audit** | Redacted domain events, evidence export, durable spool/outbox, OTLP logs |
 
-### What is different
-
-1. **Governance by construction.** The pipeline is fixed and CI-guarded.
-   Extensions add checkpoints inside existing stages; there is no arbitrary
-   stage reordering or bypass path.
-2. **Compile once, sign, activate.** Configuration is validated and compiled
-   into an immutable tenant snapshot. The control plane signs a RuntimeBundle;
-   gateways activate it atomically and keep the last-known-good bundle if
-   validation or signature checks fail.
-3. **Two-tier delivery on one contract.** Lite uses SQLite and one process;
-   Standard uses PostgreSQL + Redis and split planes. The data-plane behavior
-   and governance semantics are the same.
-4. **Agentic trust is not bolted on.** A2A/MCP share the same admission,
-   budget, approval, accounting, and audit path as model calls.
-5. **FinOps and audit are request-path features.** Budget reservation,
-   token reconciliation, evidence, and cost attribution are not batch-only
-   reporting.
-6. **Small operational footprint.** A static Go binary, distroless non-root
-   image, embedded Console, and no mandatory external runtime.
+The data plane can keep serving from the last-known-good snapshot when the
+control plane is unavailable. Budget and lease state is coordinated through
+Redis in Standard; the Lite tier does not require Redis.
 
 ---
 
@@ -206,27 +319,28 @@ flowchart LR
 
 | Dimension | **LiteAIG** | **LiteLLM** | **Higress** | **Kong AI Gateway** |
 |---|---|---|---|---|
-| Primary positioning | AI governance & agentic traffic control plane | LLM proxy/SDK and provider abstraction | Cloud-native API gateway with AI plugins | Enterprise API gateway with AI plugins |
-| Runtime | Go, single static binary | Python service/SDK | Envoy/Istio, Kubernetes-native | Nginx/OpenResty, Kong platform |
-| Configuration | Compile-time validated snapshots + signed bundles | YAML + Python callbacks/hooks | Kubernetes CRDs + Wasm plugins | Kong entities + plugin config |
+| Primary positioning | AI governance & agentic traffic control plane | LLM proxy/SDK + MCP/Agent gateway | Cloud-native API gateway with AI/MCP/Agent plugins | Enterprise AI Gateway with AI entities and policies |
+| Runtime | Go, single static binary | Python service/SDK | Envoy/Istio, Kubernetes-native or standalone Docker | Nginx/OpenResty, Kong Gateway CP/DP |
+| Configuration | Compile-time validated snapshots + signed bundles | YAML + Python callbacks/hooks | Kubernetes CRDs/Gateway API + Wasm | Kong entities + AI policies/plugins, decK/kongctl/Terraform |
 | Extensibility | Fixed pipeline + controlled checkpoints; compile-time registries and external guardrail hooks | Python ecosystem and callbacks | Wasm plugin ecosystem, CRDs | Large plugin ecosystem; Lua/Go/Python/JS |
 | Provider breadth | OpenAI, Anthropic, Azure, Bedrock, Vertex, Gemini, compatible endpoints | Very broad multi-provider catalog | Broad AI provider support via AI plugins | Broad AI provider support via AI plugins |
-| Governance depth | Fixed seven stages, budgets, TPM/RPM, RLS, audit, evidence | Virtual keys, budgets, rate limits, routing, caching, guardrails | L7 policies, token limits, WAF, AI guardrails/cache | AI rate limiting, prompt guard, PII, semantic cache |
-| Agentic traffic | A2A 0.3/1.0, MCP tools/tasks, approvals, federation, trust | Not the primary focus | MCP/AI gateway features; A2A trust not primary | MCP Proxy and AI plugins; A2A trust not primary |
-| Deployment | Binary, Docker, Helm; SQLite or PostgreSQL + Redis | Python service with DB/Redis | Kubernetes | Kong Gateway deployment |
-| Sweet spot | Regulated AI governance, A2A/MCP control, FinOps, edge-to-HA | Fastest path to many providers in Python | Platform teams already on Envoy/Istio needing L7 + AI | Enterprises standardized on Kong |
+| Governance model | Fixed seven stages, budgets, TPM/RPM, RLS, audit, evidence | Virtual keys, budgets, rate limits, routing, caching, guardrails, async spend logging | L7/WAF, AI token limits, cache, content safety, quota | AI rate limiting, prompt/semantic guard, PII, semantic cache, cost management |
+| Agentic / MCP | A2A 0.3/1.0 + MCP tools/tasks, same governance path, approvals, federation/trust | MCP Gateway + Agent Gateway (A2A); router-centric | MCP Server + AI Agent; plugin-centric | AI MCP Server + A2A traffic + AI policies |
+| Deployment | Binary, Docker, Helm; SQLite or PostgreSQL + Redis | Python service with DB/Redis | Kubernetes or Docker | Konnect or self-hosted Kong CP/DP |
+| Sweet spot | Regulated AI governance, A2A/MCP control, FinOps, small footprint | Fastest path to many providers in Python | Platform teams on Envoy/Istio needing L7 + AI | Enterprises standardized on Kong |
 
 **Trade-offs at a glance**
 
 - **LiteAIG**: smaller provider catalog and plugin ecosystem than the
-  incumbents; not a general L7/WAF gateway. Best when governance semantics
-  and a small footprint dominate.
-- **LiteLLM**: fastest path to a very broad provider catalog in Python; less
-  opinionated about a fixed governance pipeline and agent trust.
-- **Higress**: excellent Kubernetes/Envoy integration and plugin reach;
+  incumbents; not a general L7/WAF gateway. Best when governance semantics and
+  a small operational footprint dominate.
+- **LiteLLM**: very broad provider catalog and a mature Python ecosystem; its
+  governance model is proxy/router-centric rather than a fixed governance
+  pipeline.
+- **Higress**: excellent Kubernetes/Envoy integration and Wasm plugin reach;
   requires a cloud-native data plane and Kubernetes operating model.
-- **Kong AI Gateway**: mature enterprise gateway and plugin ecosystem; brings
-  the Kong platform, database/control-plane operations, and licensing
+- **Kong AI Gateway**: mature enterprise gateway, AI entities, and a large
+  plugin ecosystem; brings the Kong platform, CP/DP operations, and licensing
   considerations.
 
 **Choose LiteAIG when** governance, cost attribution, auditability, A2A/MCP
